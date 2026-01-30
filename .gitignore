@@ -1,0 +1,10 @@
+.env
+__pycache__/
+archive/
+temp_download/
+signal-cli-*/
+signal-cli.tar.gz
+ffmpeg2pass-*
+NUL
+*.log
+data/
