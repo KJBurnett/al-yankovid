@@ -21,7 +21,7 @@ class DownloadError(VideoHandlerError):
     pass
 
 # Configuration
-YT_DLP_CMD = os.path.join(sys.prefix, 'Scripts', 'yt-dlp.exe')
+YT_DLP_CMD = [sys.executable, '-m', 'yt_dlp']
 FFMPEG_CMD = 'ffmpeg'
 
 logger = logging.getLogger("AlYankoVid.VideoHandler")
@@ -31,11 +31,13 @@ def check_dependencies():
     missing = []
     
     # Check yt-dlp
-    if not os.path.exists(YT_DLP_CMD):
-        # Try just 'yt-dlp' if the venv path fails
+    try:
+        subprocess.run([*YT_DLP_CMD, '--version'], capture_output=True, check=True)
+    except:
+        # Fallback to system yt-dlp
         try:
             subprocess.run(['yt-dlp', '--version'], capture_output=True, check=True)
-            globals()['YT_DLP_CMD'] = 'yt-dlp'
+            globals()['YT_DLP_CMD'] = ['yt-dlp']
         except:
             missing.append("yt-dlp")
             
@@ -48,7 +50,7 @@ def check_dependencies():
     if missing:
         raise RuntimeError(f"Missing required dependencies: {', '.join(missing)}")
     
-    logger.info("Dependencies verified: yt-dlp, ffmpeg")
+    logger.info(f"Dependencies verified: {YT_DLP_CMD}, ffmpeg")
 
 def clean_filename(title):
     return re.sub(r'[\\/*?:"<>|]', "", title)
@@ -56,18 +58,21 @@ def clean_filename(title):
 def get_video_info(url):
     """Retrieves video metadata using yt-dlp."""
     try:
-        command = [YT_DLP_CMD, '-J', url]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        command = [*YT_DLP_CMD, '-J', url]
+        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
+        stdout = e.stdout or ""
+        logger.error(f"Error getting video info:\nStdout: {stdout}\nStderr: {stderr}")
+        
         if "Unsupported URL" in stderr:
             raise UnsupportedURLError("Al says: That URL is as unsupported as an accordion in a library!")
         elif "Authentication is required" in stderr:
             raise DownloadError("Al says: That video is behind a velvet rope! I need a VIP pass (auth) to get in.")
         else:
-            logger.error(f"Error getting video info: {stderr}")
-            raise DownloadError(f"Something went wrong while I was scoping out the video: {stderr.split(':')[-1].strip()}")
+            error_details = stderr.split(':')[-1].strip() or stdout.split('\n')[-1].strip() or "The internet tubes are clogged!"
+            raise DownloadError(f"Something went wrong while I was scoping out the video: {error_details}")
 
 def download_video(url, output_dir):
     """Downloads video using yt-dlp."""
@@ -80,13 +85,13 @@ def download_video(url, output_dir):
     try:
         # Download format: best video+audio that is mp4 compatible or anything else we can merge
         command = [
-            YT_DLP_CMD, 
+            *YT_DLP_CMD, 
             '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 
             '-o', output_template, 
             '--merge-output-format', 'mp4',
             url
         ]
-        subprocess.run(command, capture_output=True, text=True, check=True)
+        subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         
         # Find the downloaded file
         info = get_video_info(url)
@@ -99,8 +104,10 @@ def download_video(url, output_dir):
         return None
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
-        logger.error(f"Error downloading video: {stderr}")
-        raise DownloadError(f"The download failed! My digital bellows popped: {stderr.split(':')[-1].strip()}")
+        stdout = e.stdout or ""
+        logger.error(f"Error downloading video:\nStdout: {stdout}\nStderr: {stderr}")
+        error_details = stderr.split(':')[-1].strip() or stdout.split('\n')[-1].strip() or "Al's accordion is jammed!"
+        raise DownloadError(f"The download failed! My digital bellows popped: {error_details}")
     except VideoHandlerError:
         raise
     except Exception as e:
@@ -150,7 +157,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
         # Get duration
         probe = subprocess.run([
             'ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_path
-        ], capture_output=True, text=True, check=True)
+        ], capture_output=True, text=True, check=True, encoding='utf-8')
         duration = float(probe.stdout.strip())
         
         # Target bitrate = target size / duration
