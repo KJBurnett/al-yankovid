@@ -119,6 +119,30 @@ def download_video(url, output_dir):
         logger.error(f"Unexpected error during download: {e}")
         raise DownloadError(f"Even I don't know what happened there! *Accordion screech*")
 
+def archive_metadata(archive_dir, info):
+    """Saves relevant metadata to a JSON file in the archive."""
+    title = info.get("title", "")
+    description = info.get("description", "")
+    service = info.get("extractor_key", "Generic")
+    
+    # TikTok Fix: yt-dlp truncates 'title' and 'fulltitle' for TikToks. 
+    # The 'description' usually contains the full caption.
+    if service == 'TikTok' and title.endswith('...'):
+        title = description if description else title
+
+    metadata = {
+        "title": title,
+        "description": description,
+        "uploader": info.get("uploader", ""),
+        "service": service,
+        "timestamp": info.get("timestamp") or datetime.datetime.now().isoformat(),
+        "original_url": info.get("original_url", info.get("webpage_url", ""))
+    }
+    metadata_path = os.path.join(archive_dir, "metadata.json")
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=4, ensure_ascii=False)
+    return metadata_path, title, description, service
+
 def get_file_size_mb(path):
     return os.path.getsize(path) / (1024 * 1024)
 
@@ -230,7 +254,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
             if result.returncode != 0:
                  raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
             
-            # Cleanup pass logs (handled by rmtree(temp_dir) in process_video, but let's be neat)
+            # Cleanup pass logs
             for f in os.listdir(temp_dir):
                 if f.startswith(os.path.basename(pass_log_prefix)):
                     try: os.remove(os.path.join(temp_dir, f))
@@ -261,17 +285,19 @@ def find_subtitle_file(directory, video_filename_base):
     if not candidates:
         return None
         
-    # Priority: English (.en.), then first available
+    # Priority: English (en, eng, en-US, etc.), then first available
     selected = None
+    # Look for common English patterns in filename
     for c in candidates:
-        if '.en.' in c:
-            selected = c
+        lower_c = c.lower()
+        if '.en.' in lower_c or '.eng.' in lower_c or '.en-' in lower_c or '.eng-' in lower_c:
+            selected = os.path.join(directory, c)
             break
     
     if not selected:
-        selected = candidates[0]
+        selected = os.path.join(directory, candidates[0])
         
-    return os.path.join(directory, selected)
+    return selected
 
 def update_ytdlp():
     """Attempts to update yt-dlp to the latest version."""
@@ -285,80 +311,87 @@ def update_ytdlp():
         return False
 
 def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
-    """Main workflow for a video URL."""
+    """Main workflow for a video URL. Returns (file_path, title, description, metadata_path, sub_path)."""
     # 1. Check Archive
     archived_path = check_archive(url)
     if archived_path and os.path.exists(archived_path):
         logger.info(f"Found in archive: {archived_path}")
-        return archived_path
+        # Try to find metadata.json and subtitles in the same directory
+        archive_dir = os.path.dirname(archived_path)
+        metadata_path = os.path.join(archive_dir, "metadata.json")
+        title, description, service = "", "", "Generic"
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                    title = meta.get("title", "")
+                    description = meta.get("description", "")
+                    service = meta.get("service", "Generic")
+            except: pass
+            
+        sub_path = find_subtitle_file(archive_dir, os.path.basename(archived_path))
+        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path, service
 
     # Unique temp dir for concurrency
     import uuid
     temp_dir = os.path.join(os.getcwd(), f'temp_download_{uuid.uuid4().hex}')
     try:
-        # 2. Download
+        # 2. Extract Info
+        info = get_video_info(url)
+        title = info.get("title", "")
+        description = info.get("description", "")
+
+        # 3. Download
         try:
             downloaded_path = download_video(url, temp_dir)
         except DownloadError as e:
             if retry:
                 logger.warning(f"Download failed: {e}. Attempting yt-dlp update and retry...")
                 update_ytdlp()
-                time.sleep(2) # Give it a second
-                return process_video(url, user_id=user_id, retry=False, progress_callback=progress_callback) # Retry once
+                time.sleep(2)
+                return process_video(url, user_id=user_id, retry=False, progress_callback=progress_callback)
             else:
                 raise
 
         if not downloaded_path:
-            return None
+            return None, None, None, None, None, None
 
-        # 3. Always Normalize/Compress for iOS (unless archived)
+        # 4. Normalize/Compress
         final_path = compress_video(downloaded_path, MAX_SIZE_MB, force_normalize=True)
 
-        # 3.5. Oversized File Guard (Hard Limit)
+        # 4.5. Oversized File Guard
         final_size = get_file_size_mb(final_path)
-        
         if final_size > UPLOAD_LIMIT_MB:
-            logger.warning(f"Video is {final_size:.2f}MB, which is > {UPLOAD_LIMIT_MB}MB limit.")
-            
-            # --- AGGRESSIVE COMPRESSION ATTEMPT ---
             if progress_callback:
-                progress_callback() # Notify user "This is bonkers!"
-            
-            logger.info(f"Attempting aggressive compression (Target: {MAX_SIZE_MB * 0.85:.2f}MB)...")
-            # Try again with a 15% reduction to force bitrate down
-            # We pass force_normalize=True to ensure it re-encodes
+                progress_callback()
+            logger.info(f"Attempting aggressive compression for {final_size:.2f}MB video...")
             aggressive_path = compress_video(final_path, MAX_SIZE_MB * 0.85, force_normalize=True)
-            
             final_path = aggressive_path
             final_size = get_file_size_mb(final_path)
-            
             if final_size > UPLOAD_LIMIT_MB:
-                 msg = f"Video is still too large ({final_size:.2f}MB) after aggressive compression! Limit is {UPLOAD_LIMIT_MB}MB."
-                 logger.error(msg)
-                 raise FileTooLargeError(msg)
-            # ---------------------------------------
+                 raise FileTooLargeError(f"Video still too large ({final_size:.2f}MB) after aggressive compression.")
 
-        # 4. Archive (Privacy-First: archive/<user_id>/<timestamp>/)
+        # 5. Archive
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         archive_dir = os.path.join(ARCHIVE_ROOT, str(user_id), timestamp)
         os.makedirs(archive_dir, exist_ok=True)
-
+        
+        # Save Metadata
+        metadata_path, title, description, service = archive_metadata(archive_dir, info)
         
         filename = os.path.basename(final_path)
         archived_file_path = os.path.join(archive_dir, filename)
-        
         shutil.move(final_path, archived_file_path)
 
-        # 5. Handle Subtitles
+        # 6. Handle Subtitles
         download_filename = os.path.basename(downloaded_path)
         selected_sub = find_subtitle_file(temp_dir, download_filename)
-        
+        archived_sub_path = None
         if selected_sub:
             sub_ext = os.path.splitext(selected_sub)[1]
             video_base = os.path.splitext(filename)[0]
             new_sub_name = video_base + sub_ext
             archived_sub_path = os.path.join(archive_dir, new_sub_name)
-            
             shutil.move(selected_sub, archived_sub_path)
             logger.info(f"Archived subtitle: {archived_sub_path}")
         
@@ -367,13 +400,12 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
         index[url] = archived_file_path
         save_archive_index(index)
         
-        return archived_file_path
+        return archived_file_path, title, description, metadata_path, archived_sub_path, service
 
     except Exception as e:
-        logger.error(f"Failed to process video {url}: {e}")
-        raise # Re-raise so bot can log failure to stats
+        logger.error(f"Failed to process video {url}: {e}", exc_info=True)
+        raise
     finally:
-        # Always cleanup temp
         if os.path.exists(temp_dir):
             try: shutil.rmtree(temp_dir)
             except: pass
