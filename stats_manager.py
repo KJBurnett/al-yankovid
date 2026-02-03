@@ -108,6 +108,50 @@ def load_historical_index():
             return {}
     return {}
 
+def save_archive_index(index):
+    if not os.path.exists(ARCHIVE_ROOT):
+        os.makedirs(ARCHIVE_ROOT)
+    index_path = os.path.join(ARCHIVE_ROOT, 'index.json')
+    with open(index_path, 'w') as f:
+        json.dump(index, f, indent=4)
+
+def delete_archive(url):
+    """Deletes the archived files and removes references from stats and index."""
+    import shutil
+    
+    # 1. Update archive index
+    index = load_historical_index()
+    if url in index:
+        filepath = index[url]
+        # Deleting the entire directory because we store video, metadata, and subs in the same timestamp folder
+        # Directory structure is: archive/<user_id>/<timestamp>/<files>
+        folder_path = os.path.dirname(filepath)
+        
+        if os.path.exists(folder_path) and "archive" in folder_path:
+            try:
+                shutil.rmtree(folder_path)
+                logger.info(f"Deleted folder: {folder_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete folder {folder_path}: {e}")
+        
+        del index[url]
+        save_archive_index(index)
+    
+    # 2. Update stats.json
+    stats = load_stats()
+    found_in_stats = False
+    for user_uuid, data in stats.get("users", {}).items():
+        archives = data.get("archives", [])
+        new_archives = [a for a in archives if a.get("url") != url]
+        if len(new_archives) != len(archives):
+            stats["users"][user_uuid]["archives"] = new_archives
+            found_in_stats = True
+            
+    if found_in_stats:
+        save_stats(stats)
+        
+    return True
+
 def get_user_name(number):
     return USER_MAP.get(number, number)
 

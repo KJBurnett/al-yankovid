@@ -194,6 +194,15 @@ def process_incoming_message(line, process):
                         request_queue.put((url, group_id, user_id, source_number))
                         return
                     elif is_mentioned and url_match:
+                        # Check if it's a delete command first
+                        delete_match = re.search(r'delete\s+(https?://\S+)', message_text, re.IGNORECASE)
+                        if delete_match:
+                            url = delete_match.group(1)
+                            logger.info(f"Processing delete request: {url}")
+                            stats_manager.delete_archive(url)
+                            signal_manager.send_message(process, group_id, user_id, f"Consider it gone! I've scrubbed that video from my digital accordion. 🪗🧹")
+                            return
+                        
                         url = url_match.group(1)
                         logger.info(f"Queuing video request: {url}")
                         request_queue.put((url, group_id, user_id, source_number))
