@@ -6,15 +6,12 @@ services:
     container_name: al-yankovid
     restart: unless-stopped
     volumes:
-      # Persistent Data for Signal-CLI config
+      # Persistent Data (Signal Config, Stats, User Map)
       - ./data:/app/data
       # Library of downloaded/archived videos
       - ./archive:/app/archive
       # Logs
       - ./logs:/app/logs
-      # State persistence
-      - ./stats.json:/app/stats.json
-      - ./users_map.json:/app/users_map.json
     environment:
       - BOT_NUMBER=${BOT_NUMBER}
       - SIGNAL_CLI_CONFIG_DIR=/app/data

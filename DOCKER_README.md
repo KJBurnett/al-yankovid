@@ -12,6 +12,12 @@
     -   All data persists in the `./data`, `./archive`, and `./logs` folders mapped relative to where you run the compose file.
     -   **Important**: You must register or link `signal-cli` inside the container before the bot can work.
 
+## Migration (Windows -> Unraid)
+To keep your history and user names:
+1.  Copy your entire `archive/` folder from Windows to the Unraid `archive/` folder.
+2.  Copy `stats.json` and `users_map.json` from Windows into the Unraid `data/` folder.
+3.  (Optional) If you have a `signal-cli` data folder, you can copy its contents into `data/` to skip re-linking.
+
 ## Linking Existing Signal Account
 
 If you have your primary phone with Signal, you can link the bot as a secondary device:
