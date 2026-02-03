@@ -111,15 +111,28 @@ def handle_video_request(url, group_id, user_id, source_number, process):
             logger.info(f"File too large, sending heavy compression notification: {quip}")
             signal_manager.send_message(process, group_id, user_id, quip)
 
-        video_path = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression)
+        video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression)
+        video_path, title, description, metadata_path, sub_path = video_data
         
         if video_path and os.path.exists(video_path):
-            quip = personality.get_quip()
-            logger.info(f"Successfully processed {url}, sending with quip: {quip}")
-            signal_manager.send_message(process, group_id, user_id, quip, [video_path])
+            # Construct formatted message
+            msg_parts = []
+            if title:
+                # Add a little bold styling for the title
+                msg_parts.append(f"🎵 {title}")
+            if description:
+                msg_parts.append(description)
+            
+            msg_parts.append(personality.get_quip())
+            
+            final_message = "\n\n".join(msg_parts)
+            
+            logger.info(f"Successfully processed {url}, sending structured message.")
+            signal_manager.send_message(process, group_id, user_id, final_message, [video_path])
             
             # 3. Log Stats
-            stats_manager.log_archive(user_id, source_number, url, video_path)
+            stats_manager.log_archive(user_id, source_number, url, video_path, 
+                                     metadata_path=metadata_path, subtitle_path=sub_path)
             
         else:
             logger.warning(f"Failed to process {url}")

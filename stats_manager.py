@@ -41,7 +41,7 @@ def save_stats(stats):
     except Exception as e:
         logger.error(f"Failed to save stats: {e}")
 
-def log_archive(user_uuid, user_number, url, filepath):
+def log_archive(user_uuid, user_number, url, filepath, metadata_path=None, subtitle_path=None):
     stats = load_stats()
     
     if user_uuid not in stats["users"]:
@@ -61,7 +61,9 @@ def log_archive(user_uuid, user_number, url, filepath):
     entry = {
         "url": url,
         "timestamp": datetime.datetime.now().isoformat(),
-        "filepath": filepath
+        "filepath": filepath,
+        "metadata_path": metadata_path,
+        "subtitle_path": subtitle_path
     }
     
     stats["users"][user_uuid]["archives"].append(entry)
