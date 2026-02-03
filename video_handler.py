@@ -283,17 +283,19 @@ def find_subtitle_file(directory, video_filename_base):
     if not candidates:
         return None
         
-    # Priority: English (.en.), then first available
+    # Priority: English (en, eng, en-US, etc.), then first available
     selected = None
+    # Look for common English patterns in filename
     for c in candidates:
-        if '.en.' in c:
-            selected = c
+        lower_c = c.lower()
+        if '.en.' in lower_c or '.eng.' in lower_c or '.en-' in lower_c or '.eng-' in lower_c:
+            selected = os.path.join(directory, c)
             break
     
     if not selected:
-        selected = candidates[0]
+        selected = os.path.join(directory, candidates[0])
         
-    return os.path.join(directory, selected)
+    return selected
 
 def update_ytdlp():
     """Attempts to update yt-dlp to the latest version."""
