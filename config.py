@@ -16,7 +16,7 @@ if SIGNAL_CLI_PATH.startswith('./'):
     SIGNAL_CLI_PATH = os.path.join(os.getcwd(), SIGNAL_CLI_PATH[2:])
 
 # Archive Configuration
-ARCHIVE_ROOT = os.path.join(os.getcwd(), 'archive')
+ARCHIVE_ROOT = os.getenv('ARCHIVE_ROOT', os.path.join(os.getcwd(), 'archive'))
 TEMP_DOWNLOAD_DIR = os.path.join(os.getcwd(), 'temp_download')
-LOGS_DIR = os.path.join(os.getcwd(), 'logs')
+LOGS_DIR = os.getenv('LOGS_DIR', os.path.join(os.getcwd(), 'logs'))
 
