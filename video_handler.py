@@ -123,23 +123,25 @@ def archive_metadata(archive_dir, info):
     """Saves relevant metadata to a JSON file in the archive."""
     title = info.get("title", "")
     description = info.get("description", "")
+    service = info.get("extractor_key", "Generic")
     
     # TikTok Fix: yt-dlp truncates 'title' and 'fulltitle' for TikToks. 
     # The 'description' usually contains the full caption.
-    if info.get('extractor_key') == 'TikTok' and title.endswith('...'):
+    if service == 'TikTok' and title.endswith('...'):
         title = description if description else title
 
     metadata = {
         "title": title,
         "description": description,
         "uploader": info.get("uploader", ""),
+        "service": service,
         "timestamp": info.get("timestamp") or datetime.datetime.now().isoformat(),
         "original_url": info.get("original_url", info.get("webpage_url", ""))
     }
     metadata_path = os.path.join(archive_dir, "metadata.json")
     with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=4, ensure_ascii=False)
-    return metadata_path, title, description
+    return metadata_path, title, description, service
 
 def get_file_size_mb(path):
     return os.path.getsize(path) / (1024 * 1024)
@@ -317,17 +319,18 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
         # Try to find metadata.json and subtitles in the same directory
         archive_dir = os.path.dirname(archived_path)
         metadata_path = os.path.join(archive_dir, "metadata.json")
-        title, description = "", ""
+        title, description, service = "", "", "Generic"
         if os.path.exists(metadata_path):
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                     title = meta.get("title", "")
                     description = meta.get("description", "")
+                    service = meta.get("service", "Generic")
             except: pass
             
         sub_path = find_subtitle_file(archive_dir, os.path.basename(archived_path))
-        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path
+        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path, service
 
     # Unique temp dir for concurrency
     import uuid
@@ -351,7 +354,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
                 raise
 
         if not downloaded_path:
-            return None, None, None, None, None
+            return None, None, None, None, None, None
 
         # 4. Normalize/Compress
         final_path = compress_video(downloaded_path, MAX_SIZE_MB, force_normalize=True)
@@ -374,7 +377,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
         os.makedirs(archive_dir, exist_ok=True)
         
         # Save Metadata
-        metadata_path, title, description = archive_metadata(archive_dir, info)
+        metadata_path, title, description, service = archive_metadata(archive_dir, info)
         
         filename = os.path.basename(final_path)
         archived_file_path = os.path.join(archive_dir, filename)
@@ -397,7 +400,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
         index[url] = archived_file_path
         save_archive_index(index)
         
-        return archived_file_path, title, description, metadata_path, archived_sub_path
+        return archived_file_path, title, description, metadata_path, archived_sub_path, service
 
     except Exception as e:
         logger.error(f"Failed to process video {url}: {e}", exc_info=True)

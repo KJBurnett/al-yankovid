@@ -112,18 +112,25 @@ def handle_video_request(url, group_id, user_id, source_number, process):
             signal_manager.send_message(process, group_id, user_id, quip)
 
         video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression)
-        video_path, title, description, metadata_path, sub_path = video_data
+        # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service
+        video_path, title, description, metadata_path, sub_path, service = video_data
         
         if video_path and os.path.exists(video_path):
             # Construct formatted message
             quip = personality.get_quip()
             msg_parts = [quip]
             
-            display_title = title.strip() if title and title.strip() else "N/A"
-            display_description = description.strip() if description and description.strip() else "N/A"
-            
-            msg_parts.append(f"== Title ==\n{display_title}")
-            msg_parts.append(f"== Description ==\n{display_description}")
+            if service == 'TikTok':
+                # TikTok only has a caption, so we use one clean header
+                caption = title if title else description
+                display_caption = caption.strip() if caption and caption.strip() else "N/A"
+                msg_parts.append(f"== Caption ==\n{display_caption}")
+            else:
+                # Other services (YouTube, etc.) have distinct titles and descriptions
+                display_title = title.strip() if title and title.strip() else "N/A"
+                display_description = description.strip() if description and description.strip() else "N/A"
+                msg_parts.append(f"== Title ==\n{display_title}")
+                msg_parts.append(f"== Description ==\n{display_description}")
             
             final_message = "\n\n".join(msg_parts)
             
