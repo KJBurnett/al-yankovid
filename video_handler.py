@@ -121,9 +121,17 @@ def download_video(url, output_dir):
 
 def archive_metadata(archive_dir, info):
     """Saves relevant metadata to a JSON file in the archive."""
+    title = info.get("title", "")
+    description = info.get("description", "")
+    
+    # TikTok Fix: yt-dlp truncates 'title' and 'fulltitle' for TikToks. 
+    # The 'description' usually contains the full caption.
+    if info.get('extractor_key') == 'TikTok' and title.endswith('...'):
+        title = description if description else title
+
     metadata = {
-        "title": info.get("title", ""),
-        "description": info.get("description", ""),
+        "title": title,
+        "description": description,
         "uploader": info.get("uploader", ""),
         "timestamp": info.get("timestamp") or datetime.datetime.now().isoformat(),
         "original_url": info.get("original_url", info.get("webpage_url", ""))
@@ -131,7 +139,7 @@ def archive_metadata(archive_dir, info):
     metadata_path = os.path.join(archive_dir, "metadata.json")
     with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=4, ensure_ascii=False)
-    return metadata_path
+    return metadata_path, title, description
 
 def get_file_size_mb(path):
     return os.path.getsize(path) / (1024 * 1024)
@@ -364,7 +372,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
         os.makedirs(archive_dir, exist_ok=True)
         
         # Save Metadata
-        metadata_path = archive_metadata(archive_dir, info)
+        metadata_path, title, description = archive_metadata(archive_dir, info)
         
         filename = os.path.basename(final_path)
         archived_file_path = os.path.join(archive_dir, filename)

@@ -116,14 +116,15 @@ def handle_video_request(url, group_id, user_id, source_number, process):
         
         if video_path and os.path.exists(video_path):
             # Construct formatted message
-            msg_parts = []
-            if title:
-                # Add a little bold styling for the title
-                msg_parts.append(f"🎵 {title}")
-            if description:
-                msg_parts.append(description)
+            quip = personality.get_quip()
+            msg_parts = [quip]
             
-            msg_parts.append(personality.get_quip())
+            if title:
+                msg_parts.append(f"== Title ==\n{title}")
+            
+            # Only add description if it's different from the title (to avoid redundancy for TikTok)
+            if description and description.strip() != title.strip():
+                msg_parts.append(f"== Description ==\n{description}")
             
             final_message = "\n\n".join(msg_parts)
             
