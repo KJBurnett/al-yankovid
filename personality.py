@@ -147,3 +147,59 @@ def get_error():
 
 def get_sites_quip():
     return random.choice(AL_SITES_RESPONSES)
+
+AL_TOP_USER_QUIPS = [
+    "Woah! Look who it is! The King/Queen of Yanking! 👑",
+    "Bow down! The Arch-Archiver has arrived!",
+    "You've yanked more videos than I have accordions! Impressive!",
+    "Are you building a digital library? Because you're winning!",
+    "Someone give this person a medal (or a really big hard drive)!",
+    "You're on fire! (Not literally, please check your CPU temps).",
+    "The data center called, they want to name a server after you.",
+    "You're the MVP (Most Valuable Polka-fan)!",
+    "I'd write a song about you, but I'm too busy downloading your videos!",
+    "Legendary status achieved! 🌟",
+    "You're keeping my bandwidth warm! Thanks!",
+    "If archiving was an Olympic sport, you'd have the gold!",
+    "You've got the magic touch! (And the biggest collection).",
+    "I salute you, Captain Yank!",
+    "You're the reason I wake up in the morning (that and cron jobs).",
+    "Top of the charts! Top of the heap! Top of the download queue!",
+    "You're unstoppable! Like a runaway accordion!",
+    "I'm honestly impressed. That's a lot of videos!",
+    "You're the VIP of the Yanko-verse!",
+    "Keep it up! My hard drive loves the company!"
+]
+
+def get_top_user_quip():
+    return random.choice(AL_TOP_USER_QUIPS)
+
+AL_LEADER_QUIPS = [
+    "{name} is in the lead! Are they trying to yank the whole internet?",
+    "Watch out, {name} is the current Polka-King/Queen of the archive!",
+    "{name} is leading the charge! (And wearing the virtual Hawaiian shirt of victory).",
+    "Is it a bird? Is it a plane? No, it's {name} with another yank!",
+    "The bellows of victory are pumping for {name} right now!",
+    "{name} is on top! I bet they're practicing their accordion solo right now."
+]
+
+AL_TIE_QUIPS = [
+    "It's a neck-and-neck tie between {names}! I'm getting dizzy watching the leaderboard!",
+    "Breaking news: {names} are both accordion-level masters right now!",
+    "It's a polka-off! {names} are tied for the lead!",
+    "I'd flip a coin to break the tie between {names}, but I only have this rubber chicken.",
+    "The digital bellows are squeezing equally for {names}! Who will break the tie?",
+    "Is this a group dance? {names} are matching each other frame-for-frame!"
+]
+
+def get_leader_quip(name):
+    return random.choice(AL_LEADER_QUIPS).format(name=name)
+
+def get_tie_quip(names_list):
+    if len(names_list) <= 1:
+        return ""
+    names_str = " and ".join([", ".join(names_list[:-1]), names_list[-1]]) if len(names_list) > 2 else " and ".join(names_list)
+    return random.choice(AL_TIE_QUIPS).format(names=names_str)
+
+def get_heavy_compression_quip():
+    return "This is bonkers! This is a big file, this will take me a bit more time to compress! *accordion wheeze*"

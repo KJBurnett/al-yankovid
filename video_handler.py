@@ -6,7 +6,12 @@ import datetime
 import shutil
 import sys
 import logging
-from config import ARCHIVE_ROOT, MAX_SIZE_MB
+import time
+from config import ARCHIVE_ROOT, MAX_SIZE_MB, UPLOAD_LIMIT_MB
+
+class FileTooLargeError(Exception):
+    """Raised when the final file size exceeds the upload limit."""
+    pass
 
 class VideoHandlerError(Exception):
     """Base class for video handler errors."""
@@ -34,14 +39,14 @@ def check_dependencies():
     if not os.path.exists(YT_DLP_CMD):
         # Try just 'yt-dlp' if the venv path fails
         try:
-            subprocess.run(['yt-dlp', '--version'], capture_output=True, check=True)
+            subprocess.run(['yt-dlp', '--version'], capture_output=True, check=True, encoding='utf-8')
             globals()['YT_DLP_CMD'] = 'yt-dlp'
         except:
             missing.append("yt-dlp")
             
     # Check ffmpeg
     try:
-        subprocess.run([FFMPEG_CMD, '-version'], capture_output=True, check=True)
+        subprocess.run([FFMPEG_CMD, '-version'], capture_output=True, check=True, encoding='utf-8')
     except:
         missing.append("ffmpeg")
         
@@ -57,14 +62,14 @@ def get_video_info(url):
     """Retrieves video metadata using yt-dlp."""
     try:
         command = [YT_DLP_CMD, '-J', url]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
         if "Unsupported URL" in stderr:
             raise UnsupportedURLError("Al says: That URL is as unsupported as an accordion in a library!")
-        elif "Authentication is required" in stderr:
-            raise DownloadError("Al says: That video is behind a velvet rope! I need a VIP pass (auth) to get in.")
+        elif "Authentication is required" in stderr or "sign in" in stderr.lower() or "cookies" in stderr.lower():
+            raise DownloadError(f"Error: This video requires a logged in account. You can feed me, the wonderful Yankovid, cookies by looking at https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp")
         else:
             logger.error(f"Error getting video info: {stderr}")
             raise DownloadError(f"Something went wrong while I was scoping out the video: {stderr.split(':')[-1].strip()}")
@@ -79,23 +84,30 @@ def download_video(url, output_dir):
     
     try:
         # Download format: best video+audio that is mp4 compatible or anything else we can merge
+        # + Subtitles (English preferred, but any will do)
         command = [
             YT_DLP_CMD, 
             '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 
             '-o', output_template, 
             '--merge-output-format', 'mp4',
+            '--write-subs', '--write-auto-subs', '--sub-langs', 'en,.*',
             url
         ]
-        subprocess.run(command, capture_output=True, text=True, check=True)
+        # Capture and log output for deep debugging
+        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        logger.info(f"yt-dlp output:\n{result.stdout}")
         
         # Find the downloaded file
         info = get_video_info(url)
         if info:
             video_id = info.get('id')
             # Simple search for the file with the ID in the name in the output dir
+            video_path = None
             for file in os.listdir(output_dir):
-                if video_id in file:
-                    return os.path.join(output_dir, file)
+                if video_id in file and file.endswith('.mp4'):
+                    video_path = os.path.join(output_dir, file)
+                    break
+            return video_path
         return None
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
@@ -145,63 +157,134 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
     logger.info(f"Processing {input_path} ({file_size:.2f} MB) for iOS/Signal compatibility")
     
     output_path = os.path.splitext(input_path)[0] + "_normalized.mp4"
+    temp_dir = os.path.dirname(input_path)
+    pass_log_prefix = os.path.join(temp_dir, f"ffmpeg2pass_{os.getpid()}")
     
+    # Retry mechanism for compression (handles transient 'rename' file locking errors on Windows)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Get duration and bitrate
+            probe = subprocess.run([
+                'ffprobe', '-v', 'error', 
+                '-show_entries', 'format=duration:format=bit_rate', 
+                '-of', 'default=noprint_wrappers=1:nokey=1', 
+                input_path
+            ], capture_output=True, text=True, check=True, encoding='utf-8')
+            
+            # Output might be multiline, e.g. duration\nbit_rate
+            probe_output = probe.stdout.strip().split()
+            if len(probe_output) >= 1:
+                duration = float(probe_output[0])
+                # Default to high bitrate if unknown, so we use target based calc
+                original_bitrate = float(probe_output[1]) if len(probe_output) > 1 and probe_output[1] != 'N/A' else 50000000 
+            else:
+                 # Fallback
+                duration = 60
+                original_bitrate = 50000000
+
+            # Target bitrate = target size / duration
+            target_total_bitrate = (target_size_mb * 8 * 1024 * 1024) / duration
+            
+            # Smart Compression: Don't exceed original bitrate if file is small
+            if file_size < target_size_mb:
+                 target_total_bitrate = min(target_total_bitrate, original_bitrate)
+
+            audio_bitrate = 128 * 1024
+            video_bitrate = max(target_total_bitrate - audio_bitrate, 100 * 1024) # Min 100k
+            
+            # Pass 1
+            dev_null = 'NUL' if os.name == 'nt' else '/dev/null'
+            command = [
+                FFMPEG_CMD, '-y',
+                '-i', input_path,
+                '-c:v', 'libx264',
+                '-b:v', str(int(video_bitrate)),
+                '-pass', '1',
+                '-passlogfile', pass_log_prefix,
+                '-f', 'mp4',
+                '-movflags', '+faststart',
+                '-pix_fmt', 'yuv420p',
+                dev_null
+            ]
+            # Use run but handle errors manually to allow retrying
+            result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+            if result.returncode != 0:
+                raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
+            
+            # Pass 2
+            command = [
+                FFMPEG_CMD, '-y',
+                '-i', input_path,
+                '-c:v', 'libx264',
+                '-b:v', str(int(video_bitrate)),
+                '-pass', '2',
+                '-passlogfile', pass_log_prefix,
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
+                '-pix_fmt', 'yuv420p',
+                output_path
+            ]
+            result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+            if result.returncode != 0:
+                 raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
+            
+            # Cleanup pass logs (handled by rmtree(temp_dir) in process_video, but let's be neat)
+            for f in os.listdir(temp_dir):
+                if f.startswith(os.path.basename(pass_log_prefix)):
+                    try: os.remove(os.path.join(temp_dir, f))
+                    except: pass
+            
+            return output_path
+
+        except Exception as e:
+            logger.warning(f"Compression attempt {attempt+1}/{max_retries} failed: {e}")
+            if hasattr(e, 'stderr'):
+                logger.warning(f"FFmpeg Stderr: {e.stderr}")
+            if attempt < max_retries - 1:
+                time.sleep(2) # Wait a bit before retrying (let file locks release)
+            else:
+                logger.error(f"Normalization/Compression failed after {max_retries} attempts.")
+                # Return original input path on final failure
+                return input_path
+
+def find_subtitle_file(directory, video_filename_base):
+    """Finds the best subtitle file matching the video base name."""
+    candidates = []
+    video_base = os.path.splitext(video_filename_base)[0]
+    
+    for f in os.listdir(directory):
+        if f.startswith(video_base) and f.endswith(('.vtt', '.srt', '.ass')):
+             candidates.append(f)
+    
+    if not candidates:
+        return None
+        
+    # Priority: English (.en.), then first available
+    selected = None
+    for c in candidates:
+        if '.en.' in c:
+            selected = c
+            break
+    
+    if not selected:
+        selected = candidates[0]
+        
+    return os.path.join(directory, selected)
+
+def update_ytdlp():
+    """Attempts to update yt-dlp to the latest version."""
+    logger.info("Attempting to update yt-dlp...")
     try:
-        # Get duration
-        probe = subprocess.run([
-            'ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_path
-        ], capture_output=True, text=True, check=True)
-        duration = float(probe.stdout.strip())
-        
-        # Target bitrate = target size / duration
-        target_total_bitrate = (target_size_mb * 8 * 1024 * 1024) / duration
-        audio_bitrate = 128 * 1024
-        video_bitrate = max(target_total_bitrate - audio_bitrate, 100 * 1024) # Min 100k
-        
-        # Pass 1
-        dev_null = 'NUL' if os.name == 'nt' else '/dev/null'
-        command = [
-            FFMPEG_CMD, '-y',
-            '-i', input_path,
-            '-c:v', 'libx264',
-            '-b:v', str(int(video_bitrate)),
-            '-pass', '1',
-            '-f', 'mp4',
-            '-movflags', '+faststart',
-            '-pix_fmt', 'yuv420p',
-            dev_null
-        ]
-        subprocess.run(command, check=True)
-        
-        # Pass 2
-        command = [
-            FFMPEG_CMD, '-y',
-            '-i', input_path,
-            '-c:v', 'libx264',
-            '-b:v', str(int(video_bitrate)),
-            '-pass', '2',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            '-movflags', '+faststart',
-            '-pix_fmt', 'yuv420p',
-            output_path
-        ]
-        subprocess.run(command, check=True)
-        
-        # Cleanup pass logs
-        for f in os.listdir('.'):
-            if f.startswith('ffmpeg2pass'):
-                try: os.remove(f)
-                except: pass
-        
-        return output_path
-
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-U', 'yt-dlp'], check=True, capture_output=True, encoding='utf-8')
+        logger.info("yt-dlp updated successfully.")
+        return True
     except Exception as e:
-        logger.error(f"Normalization/Compression failed: {e}")
-        # If normalization fails, we still want to try sending the original
-        return input_path 
+        logger.error(f"Failed to update yt-dlp: {e}")
+        return False
 
-def process_video(url):
+def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
     """Main workflow for a video URL."""
     # 1. Check Archive
     archived_path = check_archive(url)
@@ -209,25 +292,75 @@ def process_video(url):
         logger.info(f"Found in archive: {archived_path}")
         return archived_path
 
-    temp_dir = os.path.join(os.getcwd(), 'temp_download')
+    # Unique temp dir for concurrency
+    import uuid
+    temp_dir = os.path.join(os.getcwd(), f'temp_download_{uuid.uuid4().hex}')
     try:
         # 2. Download
-        downloaded_path = download_video(url, temp_dir)
+        try:
+            downloaded_path = download_video(url, temp_dir)
+        except DownloadError as e:
+            if retry:
+                logger.warning(f"Download failed: {e}. Attempting yt-dlp update and retry...")
+                update_ytdlp()
+                time.sleep(2) # Give it a second
+                return process_video(url, user_id=user_id, retry=False, progress_callback=progress_callback) # Retry once
+            else:
+                raise
+
         if not downloaded_path:
             return None
 
         # 3. Always Normalize/Compress for iOS (unless archived)
         final_path = compress_video(downloaded_path, MAX_SIZE_MB, force_normalize=True)
 
-        # 4. Archive
+        # 3.5. Oversized File Guard (Hard Limit)
+        final_size = get_file_size_mb(final_path)
+        
+        if final_size > UPLOAD_LIMIT_MB:
+            logger.warning(f"Video is {final_size:.2f}MB, which is > {UPLOAD_LIMIT_MB}MB limit.")
+            
+            # --- AGGRESSIVE COMPRESSION ATTEMPT ---
+            if progress_callback:
+                progress_callback() # Notify user "This is bonkers!"
+            
+            logger.info(f"Attempting aggressive compression (Target: {MAX_SIZE_MB * 0.85:.2f}MB)...")
+            # Try again with a 15% reduction to force bitrate down
+            # We pass force_normalize=True to ensure it re-encodes
+            aggressive_path = compress_video(final_path, MAX_SIZE_MB * 0.85, force_normalize=True)
+            
+            final_path = aggressive_path
+            final_size = get_file_size_mb(final_path)
+            
+            if final_size > UPLOAD_LIMIT_MB:
+                 msg = f"Video is still too large ({final_size:.2f}MB) after aggressive compression! Limit is {UPLOAD_LIMIT_MB}MB."
+                 logger.error(msg)
+                 raise FileTooLargeError(msg)
+            # ---------------------------------------
+
+        # 4. Archive (Privacy-First: archive/<user_id>/<timestamp>/)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        archive_dir = os.path.join(ARCHIVE_ROOT, timestamp)
+        archive_dir = os.path.join(ARCHIVE_ROOT, str(user_id), timestamp)
         os.makedirs(archive_dir, exist_ok=True)
+
         
         filename = os.path.basename(final_path)
         archived_file_path = os.path.join(archive_dir, filename)
         
         shutil.move(final_path, archived_file_path)
+
+        # 5. Handle Subtitles
+        download_filename = os.path.basename(downloaded_path)
+        selected_sub = find_subtitle_file(temp_dir, download_filename)
+        
+        if selected_sub:
+            sub_ext = os.path.splitext(selected_sub)[1]
+            video_base = os.path.splitext(filename)[0]
+            new_sub_name = video_base + sub_ext
+            archived_sub_path = os.path.join(archive_dir, new_sub_name)
+            
+            shutil.move(selected_sub, archived_sub_path)
+            logger.info(f"Archived subtitle: {archived_sub_path}")
         
         # Update index
         index = load_archive_index()
@@ -238,7 +371,7 @@ def process_video(url):
 
     except Exception as e:
         logger.error(f"Failed to process video {url}: {e}")
-        return None
+        raise # Re-raise so bot can log failure to stats
     finally:
         # Always cleanup temp
         if os.path.exists(temp_dir):

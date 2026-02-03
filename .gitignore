@@ -8,3 +8,5 @@ ffmpeg2pass-*
 NUL
 *.log
 data/
+stats.json
+users_map.json
