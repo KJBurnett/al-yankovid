@@ -2,11 +2,9 @@ import json
 import os
 import logging
 import datetime
-from config import ARCHIVE_ROOT
+from config import ARCHIVE_ROOT, USERS_MAP_FILE, STATS_FILE
 
 # Configuration
-STATS_FILE = os.path.join(os.getcwd(), 'stats.json')
-USERS_MAP_FILE = os.path.join(os.getcwd(), 'users_map.json')
 logger = logging.getLogger("AlYankoVid.Stats")
 
 def load_user_map():
