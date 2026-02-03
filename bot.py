@@ -111,15 +111,35 @@ def handle_video_request(url, group_id, user_id, source_number, process):
             logger.info(f"File too large, sending heavy compression notification: {quip}")
             signal_manager.send_message(process, group_id, user_id, quip)
 
-        video_path = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression)
+        video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression)
+        # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service
+        video_path, title, description, metadata_path, sub_path, service = video_data
         
         if video_path and os.path.exists(video_path):
+            # Construct formatted message
             quip = personality.get_quip()
-            logger.info(f"Successfully processed {url}, sending with quip: {quip}")
-            signal_manager.send_message(process, group_id, user_id, quip, [video_path])
+            msg_parts = [quip]
+            
+            if service == 'TikTok':
+                # TikTok only has a caption, so we use one clean header
+                caption = title if title else description
+                display_caption = caption.strip() if caption and caption.strip() else "N/A"
+                msg_parts.append(f"== Caption ==\n{display_caption}")
+            else:
+                # Other services (YouTube, etc.) have distinct titles and descriptions
+                display_title = title.strip() if title and title.strip() else "N/A"
+                display_description = description.strip() if description and description.strip() else "N/A"
+                msg_parts.append(f"== Title ==\n{display_title}")
+                msg_parts.append(f"== Description ==\n{display_description}")
+            
+            final_message = "\n\n".join(msg_parts)
+            
+            logger.info(f"Successfully processed {url}, sending structured message.")
+            signal_manager.send_message(process, group_id, user_id, final_message, [video_path])
             
             # 3. Log Stats
-            stats_manager.log_archive(user_id, source_number, url, video_path)
+            stats_manager.log_archive(user_id, source_number, url, video_path, 
+                                     metadata_path=metadata_path, subtitle_path=sub_path)
             
         else:
             logger.warning(f"Failed to process {url}")
@@ -180,6 +200,15 @@ def process_incoming_message(line, process):
                         request_queue.put((url, group_id, user_id, source_number))
                         return
                     elif is_mentioned and url_match:
+                        # Check if it's a delete command first
+                        delete_match = re.search(r'delete\s+(https?://\S+)', message_text, re.IGNORECASE)
+                        if delete_match:
+                            url = delete_match.group(1)
+                            logger.info(f"Processing delete request: {url}")
+                            stats_manager.delete_archive(url)
+                            signal_manager.send_message(process, group_id, user_id, f"Consider it gone! I've scrubbed that video from my digital accordion. 🪗🧹")
+                            return
+                        
                         url = url_match.group(1)
                         logger.info(f"Queuing video request: {url}")
                         request_queue.put((url, group_id, user_id, source_number))
