@@ -167,53 +167,87 @@ def get_formatted_stats():
     users = stats.get("users", {})
     
     leaderboard = []
-    total_attributed = 0
+    total_attributed_count = 0
+    total_attributed_size_mb = 0
     
     for number, data in users.items():
         archives = data.get("archives", [])
         
-        # Verify existence
-        valid_archives = [a for a in archives if os.path.exists(a.get('filepath', ''))]
-        count = len(valid_archives)
+        # Verify existence and sum size
+        user_valid_archives = 0
+        user_size_mb = 0
         
-        if count > 0:
+        for a in archives:
+            path = a.get('filepath', '')
+            if os.path.exists(path):
+                user_valid_archives += 1
+                try:
+                    size_bytes = os.path.getsize(path)
+                    user_size_mb += size_bytes / (1024 * 1024)
+                except:
+                    pass
+        
+        if user_valid_archives > 0:
             # Use the stored name in stats.json, fallback to map, fallback to UUID
             name = data.get("name") or get_user_name(number) 
-            leaderboard.append((name, count, number))
-            total_attributed += count
+            leaderboard.append({
+                "name": name, 
+                "count": user_valid_archives, 
+                "size": user_size_mb,
+                "number": number
+            })
+            total_attributed_count += user_valid_archives
+            total_attributed_size_mb += user_size_mb
     
     # Sort by count descending
-    leaderboard.sort(key=lambda x: x[1], reverse=True)
+    leaderboard.sort(key=lambda x: x["count"], reverse=True)
     
     # 3. Format Response
     msg = [f"Total Archives: {total_historical}"]
     
-    leaders_quip = ""
+    if total_attributed_size_mb > 1024:
+        msg.append(f"Grand Total Size: {total_attributed_size_mb/1024:.2f} GB")
+    else:
+        msg.append(f"Grand Total Size: {total_attributed_size_mb:.2f} MB")
+    
+    quips = []
+    
     if leaderboard:
         msg.append("-" * 20)
-        for rank, (name, count, number) in enumerate(leaderboard, 1):
-            msg.append(f"{rank}. {name}: {count}")
+        for rank, item in enumerate(leaderboard, 1):
+            size_str = f"{item['size']/1024:.2f} GB" if item['size'] > 1024 else f"{item['size']:.1f} MB"
+            msg.append(f"{rank}. {item['name']}: {item['count']} ({size_str})")
             
-        unattributed = total_historical - total_attributed
+        unattributed = total_historical - total_attributed_count
         if unattributed > 0:
             msg.append(f"— Plus {unattributed} historical relics from the 'Before Times'.")
             
-        # Determine Leader(s)
-        max_count = leaderboard[0][1]
-        leaders = [item[0] for item in leaderboard if item[1] == max_count]
+        # Determine Count Leader(s)
+        max_count = leaderboard[0]["count"]
+        leaders = [item["name"] for item in leaderboard if item["count"] == max_count]
         
         if len(leaders) > 1:
-            leaders_quip = personality.get_tie_quip(leaders)
+            quips.append(personality.get_tie_quip(leaders))
         else:
-            leaders_quip = personality.get_leader_quip(leaders[0])
+            quips.append(personality.get_leader_quip(leaders[0]))
             
+        # Determine Storage Leader
+        storage_leader_item = max(leaderboard, key=lambda x: x["size"])
+        # Only add storage quip if they have a non-trivial amount (e.g. > 100MB) and not already praised for being the only leader? 
+        # Actually user asked for it specifically.
+        # Avoid double quip if the storage leader is the same as the count leader? 
+        # User said "make sure there's a whacky quote for the person with the biggest storage usage too".
+        # So we can have two quotes.
+        
+        quips.append(personality.get_storage_leader_quip(storage_leader_item["name"]))
+
     elif total_historical > 0:
         msg.append(f"All {total_historical} archives are currently unattributed relics!")
     else:
         msg.append("\nNo one has claimed any archives yet! Be the first!")
         
     final_msg = "\n".join(msg)
-    if leaders_quip:
-        final_msg += f"\n\n{leaders_quip}"
+    if quips:
+        final_msg += "\n\n" + "\n\n".join(quips)
         
-    return final_msg, None # Second return kept for compatibility but not primary
+    return final_msg, None
