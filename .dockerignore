@@ -1,0 +1,17 @@
+# Exclude persistent data, build artifacts, and large files from Docker build context
+archive
+data
+logs
+.env
+.env.*
+.venv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.tar.gz
+*.zip
+*.log
+.git
+node_modules

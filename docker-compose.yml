@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  alyankovid:
+    build: .
+    container_name: al-yankovid
+    restart: unless-stopped
+    volumes:
+      # Persistent Data (Signal Config, Stats, User Map)
+      - ./data:/app/data
+      # Library of downloaded/archived videos
+      - ./archive:/app/archive
+      # Logs
+      - ./logs:/app/logs
+    environment:
+      - BOT_NUMBER=${BOT_NUMBER}
+      - SIGNAL_CLI_CONFIG_DIR=/app/data
+      - TZ=America/Los_Angeles  # Set your timezone
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # ffmpeg can be hungry

@@ -11,9 +11,16 @@ def run_signal_daemon():
     """Runs signal-cli in json-rpc mode."""
     env = os.environ.copy()
     env['JAVA_HOME'] = JAVA_HOME
-    
-    command = [SIGNAL_CLI_PATH, '-u', BOT_NUMBER, 'jsonRpc']
-    
+
+    # Determine config directory for signal-cli. Prefer SIGNAL_CLI_CONFIG_DIR env var.
+    config_dir = env.get('SIGNAL_CLI_CONFIG_DIR', '/app/data')
+    # If the config_dir contains a nested 'signal-cli' folder (common when copying), point to that.
+    nested = os.path.join(config_dir, 'signal-cli')
+    if os.path.isdir(nested):
+        config_dir = nested
+
+    command = [SIGNAL_CLI_PATH, '--config', config_dir, '-u', BOT_NUMBER, 'jsonRpc']
+
     creationflags = 0
     if os.name == 'nt':
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP

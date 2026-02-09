@@ -13,6 +13,25 @@ class FileTooLargeError(Exception):
     """Raised when the final file size exceeds the upload limit."""
     pass
 
+def safe_subprocess_run(command, **kwargs):
+    """Wrapper for subprocess.run that handles encoding safely."""
+    # Force text=True if encoding is specified, unless explicitly set otherwise
+    if 'encoding' in kwargs:
+        kwargs['text'] = True
+        # Always use replace to avoid crashes on weird chars (emojis, etc)
+        kwargs['errors'] = 'replace'
+    
+    # If text/universal_newlines is True but no encoding, default to utf-8 generally for this app, 
+    # but let's stick to what was passed or default. 
+    # If the user didn't pass encoding but passed text=True, Python defaults to locale encoding.
+    # We want to be robust. 
+    if kwargs.get('text') or kwargs.get('universal_newlines'):
+        if 'encoding' not in kwargs:
+            kwargs['encoding'] = 'utf-8'
+        kwargs['errors'] = 'replace'
+            
+    return subprocess.run(command, **kwargs)
+
 class VideoHandlerError(Exception):
     """Base class for video handler errors."""
     pass
@@ -39,14 +58,14 @@ def check_dependencies():
     if not os.path.exists(YT_DLP_CMD):
         # Try just 'yt-dlp' if the venv path fails
         try:
-            subprocess.run(['yt-dlp', '--version'], capture_output=True, check=True, encoding='utf-8')
+            safe_subprocess_run(['yt-dlp', '--version'], capture_output=True, check=True, encoding='utf-8')
             globals()['YT_DLP_CMD'] = 'yt-dlp'
         except:
             missing.append("yt-dlp")
             
     # Check ffmpeg
     try:
-        subprocess.run([FFMPEG_CMD, '-version'], capture_output=True, check=True, encoding='utf-8')
+        safe_subprocess_run([FFMPEG_CMD, '-version'], capture_output=True, check=True, encoding='utf-8')
     except:
         missing.append("ffmpeg")
         
@@ -62,7 +81,7 @@ def get_video_info(url):
     """Retrieves video metadata using yt-dlp."""
     try:
         command = [YT_DLP_CMD, '-J', url]
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        result = safe_subprocess_run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
@@ -94,7 +113,7 @@ def download_video(url, output_dir):
             url
         ]
         # Capture and log output for deep debugging
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        result = safe_subprocess_run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         logger.info(f"yt-dlp output:\n{result.stdout}")
         
         # Find the downloaded file
@@ -189,7 +208,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
     for attempt in range(max_retries):
         try:
             # Get duration and bitrate
-            probe = subprocess.run([
+            probe = safe_subprocess_run([
                 'ffprobe', '-v', 'error', 
                 '-show_entries', 'format=duration:format=bit_rate', 
                 '-of', 'default=noprint_wrappers=1:nokey=1', 
@@ -232,7 +251,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
                 dev_null
             ]
             # Use run but handle errors manually to allow retrying
-            result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+            result = safe_subprocess_run(command, capture_output=True, text=True, encoding='utf-8')
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
             
@@ -250,7 +269,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
                 '-pix_fmt', 'yuv420p',
                 output_path
             ]
-            result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8')
+            result = safe_subprocess_run(command, capture_output=True, text=True, encoding='utf-8')
             if result.returncode != 0:
                  raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout, stderr=result.stderr)
             
@@ -303,7 +322,7 @@ def update_ytdlp():
     """Attempts to update yt-dlp to the latest version."""
     logger.info("Attempting to update yt-dlp...")
     try:
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-U', 'yt-dlp'], check=True, capture_output=True, encoding='utf-8')
+        safe_subprocess_run([sys.executable, '-m', 'pip', 'install', '-U', 'yt-dlp'], check=True, capture_output=True, encoding='utf-8')
         logger.info("yt-dlp updated successfully.")
         return True
     except Exception as e:

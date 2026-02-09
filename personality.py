@@ -203,3 +203,19 @@ def get_tie_quip(names_list):
 
 def get_heavy_compression_quip():
     return "This is bonkers! This is a big file, this will take me a bit more time to compress! *accordion wheeze*"
+
+AL_STORAGE_LEADER_QUIPS = [
+    "Woah, {name}! You're hoarding so many bytes, you might need a digital warehouse! 🏗️",
+    "{name} is the Data Hoarder Supreme! Keep feeding the hard drive!",
+    "Is {name} trying to download the entire internet? Because they're off to a great start!",
+    "Alert the media! {name} has the heaviest digital backpack right now! 🎒",
+    "{name} is single-handedly keeping the bits flowing! Look at that usage!",
+    "That's a lot of ones and zeros, {name}! You're a digital heavyweight! 💪",
+    "{name} loves pixels so much, they're collecting them all! Gotta catch 'em all!",
+    "If bytes were sand, {name} would own a desert by now! 🏜️",
+    "{name} is the Storage King/Queen! Long live the King/Queen!",
+    "Holy Terabyte, {name}! That's impressive!"
+]
+
+def get_storage_leader_quip(name):
+    return random.choice(AL_STORAGE_LEADER_QUIPS).format(name=name)
