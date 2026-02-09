@@ -1,0 +1,38 @@
+# Docker Compose template for UnRAID
+# Edit the host-side paths (/mnt/user/...) to match your UnRAID shares.
+version: '3.8'
+
+services:
+  alyankovid:
+    build: .
+    container_name: al-yankovid
+    restart: unless-stopped
+    # Run the container as the host UID/GID to avoid permission issues on UnRAID
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - BOT_NUMBER=${BOT_NUMBER}
+      - SIGNAL_CLI_CONFIG_DIR=/app/data
+      - TZ=${TZ:-UTC}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    volumes:
+      # Persistent Signal config/data (must contain signal-cli config if already registered)
+      - /mnt/user/appdata/al-yankovid/data:/app/data
+      # Library of downloaded/archived videos
+      - /mnt/user/appdata/al-yankovid/archive:/app/archive
+      # Logs
+      - /mnt/user/appdata/al-yankovid/logs:/app/logs
+    # Optional resource limits; tune for your host
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+# Notes:
+# - Before starting the container, copy your existing Windows './data' and './archive' into the host paths above
+#   (e.g., /mnt/user/appdata/al-yankovid/data and /mnt/user/appdata/al-yankovid/archive).
+# - Set PUID and PGID to your desired user (typically the user that owns the UnRAID shares) in the UnRAID container settings.
+# - To register/link signal-cli the first time, `exec` into the running container and run:
+#     signal-cli --config /app/data link -n "YourDeviceName"
+#   or use the commands shown in entrypoint.sh.
+# - The Dockerfile downloads signal-cli during image build; ensure installed Java version meets signal-cli requirements.

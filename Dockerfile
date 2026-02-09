@@ -2,12 +2,12 @@ FROM python:3.10-slim
 
 # Install system dependencies
 # ffmpeg: Video processing
-# default-jre: Java Runtime for signal-cli
+# openjdk-21-jre-headless: Java Runtime for signal-cli (Java 21+)
 # curl, wget, tar: Downloading utilities
 # libmagic1: Often needed for python-magic (if used later)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    default-jre \
+    openjdk-21-jre-headless \
     curl \
     wget \
     tar \
@@ -15,16 +15,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up Signal-CLI environment
-ENV SIGNAL_CLI_VERSION=0.13.3
+ENV SIGNAL_CLI_VERSION=0.13.23
 ENV SIGNAL_CLI_HOME=/opt/signal-cli
 ENV PATH=$PATH:$SIGNAL_CLI_HOME/bin
 
-# Download and install Signal-CLI
-RUN cd /opt && \
-    wget https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz && \
-    tar xf signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz && \
-    rm signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz && \
-    mv signal-cli-${SIGNAL_CLI_VERSION} signal-cli
+# Install signal-cli from bundled directory if present (preferred for reproducible builds)
+COPY signal-cli-0.13.23 /opt/signal-cli
+ENV PATH=$PATH:/opt/signal-cli/bin
 
 # Verify signal-cli installation
 RUN signal-cli --version
