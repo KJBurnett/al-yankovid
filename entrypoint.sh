@@ -27,8 +27,14 @@ else
     echo "Signal configuration found in $SIGNAL_CONFIG"
 fi
 
-# Ensure log directory exists
-mkdir -p /app/logs
+# Ensure directories exist
+mkdir -p /app/logs /app/data /app/archive
+
+# If PUID/PGID provided, adjust ownership (useful on UnRAID)
+if [ -n "${PUID:-}" ] && [ -n "${PGID:-}" ]; then
+    echo "Adjusting ownership of /app/data, /app/archive, /app/logs to ${PUID}:${PGID}"
+    chown -R "${PUID}:${PGID}" /app/data /app/archive /app/logs || true
+fi
 
 echo "Starting Al YankoVid..."
 exec python bot.py

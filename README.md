@@ -77,3 +77,87 @@ Simply press **`Ctrl+C`** in the terminal window. This works on Windows, Mac, an
 -   `video_handler.py`: Logic for downloading and FFmpeg optimization.
 -   `personality.py`: The brains behind the quips and polka-tastic attitude!
 -   `config.py`: Loads settings from `.env`.
+
+## Migration & Deployment Notes (unRAID)
+
+This repository was migrated to an unRAID container during development. Key actions and commands used during the migration are recorded here so you can reproduce the same setup.
+
+Important: never commit runtime registration files or archives to the repository. The project .gitignore already excludes `data/` and `archive/`, but always verify before pushing.
+
+1) Prepare host shares on unRAID
+- Copy your existing `archive/` to a safe host path (example: `/mnt/user/drivepool/Containers/al-yankovid/archive`).
+- Place the signal-cli runtime config (the `signal-cli` folder containing `data/`, `accounts.json`, `attachments/`, etc.) into your host `data` share (e.g., `/mnt/user/appdata/al-yankovid/data/signal-cli`).
+- Ensure permissions: chown the host folders to the user you will run the container as (or use root):
+
+```bash
+# Example (run on unRAID host)
+sudo chown -R 1000:1000 /mnt/user/appdata/al-yankovid
+sudo chown -R 1000:1000 /mnt/user/drivepool/Containers/al-yankovid/archive
+```
+
+2) Transfer image to unRAID (alternative to building on host)
+- Save locally-built image:
+
+```bash
+# On your build machine
+docker save -o al-yankovid.tar al-yankovid:latest
+# Copy al-yankovid.tar to your unRAID server (SCP, SMB, or move it to a share)
+```
+
+- Load on unRAID:
+
+```bash
+# On unRAID host
+docker load -i /path/to/al-yankovid.tar
+```
+
+3) Run on unRAID (example)
+
+```bash
+docker run -d --name al-yankovid --restart unless-stopped \
+  -e BOT_NUMBER='+16014365901' \
+  -e SIGNAL_CLI_CONFIG_DIR=/app/data \
+  -e SIGNAL_CLI_PATH=/opt/signal-cli/bin/signal-cli \
+  -e JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
+  -e PUID=0 -e PGID=0 -e TZ='America/Los_Angeles' \
+  -v /mnt/user/appdata/al-yankovid/data:/app/data:rw \
+  -v /mnt/user/drivepool/Containers/al-yankovid/archive:/app/archive:rw \
+  -v /mnt/user/appdata/al-yankovid/logs:/app/logs:rw \
+  al-yankovid:latest
+```
+
+After start: verify with `docker logs -f al-yankovid` and ensure the bot reports "Signal-cli daemon started, waiting for messages".
+
+4) Pushing code changes and images to GitHub / Docker Hub (recommended workflow)
+- Create a branch for your changes:
+
+```bash
+git checkout -b feature/unraid-migration
+# Make changes (Dockerfile, entrypoint.sh, compose, docs)
+git add .
+# Always check for sensitive files before committing
+git status --short
+git diff --staged
+# If any sensitive files are staged, remove them: git reset <path> or git rm --cached <path>
+
+git commit -m "Add unRAID migration docs and Docker adjustments"
+git push origin feature/unraid-migration
+# Open a Pull Request on GitHub and review changes (especially ensure data/ and archive/ are not included)
+```
+
+- (Optional) Publish Docker image to a registry so you can `docker pull` on unRAID instead of loading a tar:
+
+```bash
+# Tag and push to Docker Hub
+docker tag al-yankovid:latest your-dockerhub-username/al-yankovid:latest
+docker push your-dockerhub-username/al-yankovid:latest
+```
+
+- In GitHub, create a release or connect Docker Hub automated builds to your repository to publish images on merge.
+
+5) Final checklist before merging
+- Verify `.gitignore` excludes `data/`, `archive/`, `.env` and any local-only artifacts.
+- Run `git status` and `git diff` to ensure no credentials or registration files are present.
+- Merge your branch to `main`, then (optionally) build and push an image tagged from `main` to your registry.
+
+If you'd like, I can add a GitHub Actions workflow to build and optionally push images to Docker Hub on merge to `main` (keep in mind secrets for Docker Hub must be configured in GitHub).
