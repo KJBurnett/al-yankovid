@@ -148,9 +148,9 @@ git push origin feature/unraid-migration
 - (Optional) Publish Docker image to a registry so you can `docker pull` on unRAID instead of loading a tar:
 
 ```bash
-# Tag and push to Docker Hub
-docker tag al-yankovid:latest your-dockerhub-username/al-yankovid:latest
-docker push your-dockerhub-username/al-yankovid:latest
+# Tag and push to GHCR (GitHub Container Registry)
+docker tag al-yankovid:latest ghcr.io/KJBurnett/al-yankovid:latest
+docker push ghcr.io/KJBurnett/al-yankovid:latest
 ```
 
 - In GitHub, create a release or connect Docker Hub automated builds to your repository to publish images on merge.
