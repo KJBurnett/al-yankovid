@@ -149,8 +149,8 @@ git push origin feature/unraid-migration
 
 ```bash
 # Tag and push to GHCR (GitHub Container Registry)
-docker tag al-yankovid:latest ghcr.io/KJBurnett/al-yankovid:latest
-docker push ghcr.io/KJBurnett/al-yankovid:latest
+docker tag al-yankovid:latest ghcr.io/kjburnett/al-yankovid:latest
+docker push ghcr.io/kjburnett/al-yankovid:latest
 ```
 
 - In GitHub, create a release or connect Docker Hub automated builds to your repository to publish images on merge.
