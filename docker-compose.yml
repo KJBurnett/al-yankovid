@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   alyankovid:
-    image: ghcr.io/KJBurnett/al-yankovid:latest
+    image: ghcr.io/kjburnett/al-yankovid:latest
     container_name: al-yankovid
     restart: unless-stopped
     volumes:
