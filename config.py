@@ -19,6 +19,8 @@ if SIGNAL_CLI_PATH.startswith('./'):
 ARCHIVE_ROOT = os.getenv('ARCHIVE_ROOT', os.path.join(os.getcwd(), 'archive'))
 TEMP_DOWNLOAD_DIR = os.path.join(os.getcwd(), 'temp_download')
 LOGS_DIR = os.getenv('LOGS_DIR', os.path.join(os.getcwd(), 'logs'))
+if not os.path.exists(LOGS_DIR):
+    os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Data Persistence (Stats, Maps, Signal Config)
 # Default to ./data locally, or /app/data in Docker
