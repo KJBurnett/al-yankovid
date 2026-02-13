@@ -21,6 +21,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set IMAGE_NAME
+        run: |
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          echo "IMAGE_NAME=ghcr.io/${OWNER,,}/al-yankovid" >> $GITHUB_ENV
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
