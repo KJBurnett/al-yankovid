@@ -6,6 +6,7 @@ load_dotenv()
 
 # Configuration Variables
 BOT_NUMBER = os.getenv('BOT_NUMBER', '+1234567890')
+BOT_UUID = os.getenv('BOT_UUID', '')
 JAVA_HOME = os.getenv('JAVA_HOME', 'C:\\Path\\To\\Java')
 MAX_SIZE_MB = int(os.getenv('MAX_SIZE_MB', '75'))
 UPLOAD_LIMIT_MB = 98 # Hard limit for Signal uploads (approx 100MB)
