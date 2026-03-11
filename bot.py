@@ -15,7 +15,7 @@ import signal_manager
 import personality
 import stats_manager
 import datetime
-from config import BOT_NUMBER, LOGS_DIR
+from config import BOT_NUMBER, BOT_UUID, LOGS_DIR
 
 # Ensure logs directory exists
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -189,10 +189,15 @@ def process_incoming_message(line, process):
                         if mention.get('number') == BOT_NUMBER:
                             is_mentioned = True
                             break
+                        if BOT_UUID and mention.get('uuid') == BOT_UUID:
+                            is_mentioned = True
+                            break
+                    if not is_mentioned and mentions:
+                        logger.info(f"Unmatched mentions (check BOT_UUID config): {mentions}")
                     
                     # 2. Check for "Yank {url}" OR (mentioned AND contains URL)
                     url_match = re.search(r'(https?://\S+)', message_text)
-                    yank_match = re.search(r'Yank\s+(https?://\S+)', message_text, re.IGNORECASE)
+                    yank_match = re.search(r'(?:Yank|Yoink)\s+(https?://\S+)', message_text, re.IGNORECASE)
                     
                     if yank_match:
                         url = yank_match.group(1)
