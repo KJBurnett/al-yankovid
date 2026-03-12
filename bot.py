@@ -189,21 +189,29 @@ def process_incoming_message(line, process):
 
                     # Debug: log all group messages to diagnose mention detection
                     if group_id:
-                        logger.info(f"Group message received. mentions={data_message.get('mentions', [])} text={message_text[:80]!r}")
+                        logger.info(f"Group message received. mentions={data_message.get('mentions', [])} bodyRanges={data_message.get('bodyRanges', [])} text={message_text[:80]!r}")
 
                     # 1. Check for @mentions of Al in groups
-
                     mentions = data_message.get('mentions', [])
+                    body_ranges = data_message.get('bodyRanges', [])
                     is_mentioned = False
+
+                    # Check legacy mentions array
                     for mention in mentions:
-                        if mention.get('number') == BOT_NUMBER:
+                        if mention.get('number') == BOT_NUMBER or (BOT_UUID and mention.get('uuid') == BOT_UUID):
                             is_mentioned = True
                             break
-                        if BOT_UUID and mention.get('uuid') == BOT_UUID:
-                            is_mentioned = True
-                            break
-                    if not is_mentioned and mentions:
-                        logger.info(f"Unmatched mentions (check BOT_UUID config): {mentions}")
+
+                    # Check bodyRanges (newer signal-cli versions)
+                    if not is_mentioned:
+                        for r in body_ranges:
+                            mention_uuid = r.get('mentionUuid') or r.get('uuid')
+                            if mention_uuid == BOT_UUID or r.get('number') == BOT_NUMBER:
+                                is_mentioned = True
+                                break
+
+                    if not is_mentioned and (mentions or body_ranges):
+                        logger.info(f"Unmatched mentions (check BOT_UUID config): mentions={mentions} bodyRanges={body_ranges}")
                     
                     # 2. Check for "Yank {url}" OR (mentioned AND contains URL)
                     url_match = re.search(r'(https?://\S+)', message_text)
