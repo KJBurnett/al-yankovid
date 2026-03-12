@@ -186,7 +186,11 @@ def process_incoming_message(line, process):
                     
                     group_info = data_message.get('groupInfo')
                     group_id = group_info.get('groupId') if group_info else None
-                    
+
+                    # Debug: log all group messages to diagnose mention detection
+                    if group_id:
+                        logger.info(f"Group message received. mentions={data_message.get('mentions', [])} text={message_text[:80]!r}")
+
                     # 1. Check for @mentions of Al in groups
 
                     mentions = data_message.get('mentions', [])
