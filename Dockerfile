@@ -19,9 +19,12 @@ ENV SIGNAL_CLI_VERSION=0.13.23
 ENV SIGNAL_CLI_HOME=/opt/signal-cli
 ENV PATH=$PATH:$SIGNAL_CLI_HOME/bin
 
-# Install signal-cli from bundled directory if present (preferred for reproducible builds)
-COPY signal-cli-0.13.23 /opt/signal-cli
-ENV PATH=$PATH:/opt/signal-cli/bin
+# Install signal-cli from GitHub releases
+RUN wget -q "https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz" \
+    -O /tmp/signal-cli.tar.gz \
+    && tar -xzf /tmp/signal-cli.tar.gz -C /opt/ \
+    && mv /opt/signal-cli-${SIGNAL_CLI_VERSION} /opt/signal-cli \
+    && rm /tmp/signal-cli.tar.gz
 
 # Verify signal-cli installation
 RUN signal-cli --version
