@@ -60,7 +60,7 @@ def test_handle_video_request_success_path(tmp_env, fake_process, monkeypatch, t
     v.write_text('x')
 
     # stub process_video
-    def fake_process_video(url, user_id=None, progress_callback=None):
+    def fake_process_video(url, user_id=None, progress_callback=None, retry_callback=None):
         return (str(v), 'T', 'D', None, None, 'YouTube')
     monkeypatch.setattr(vh, 'process_video', fake_process_video)
 
@@ -90,7 +90,7 @@ def test_handle_video_request_failure_paths(tmp_env, fake_process, monkeypatch):
     importlib.reload(vh)
 
     # Test DownloadError
-    def raise_download(url, user_id=None, progress_callback=None):
+    def raise_download(url, user_id=None, progress_callback=None, retry_callback=None):
         raise vh.DownloadError('download failed')
     monkeypatch.setattr(vh, 'process_video', raise_download)
     sm = importlib.import_module('stats_manager')
@@ -106,7 +106,7 @@ def test_handle_video_request_failure_paths(tmp_env, fake_process, monkeypatch):
 
     # Test FileTooLargeError
     fake_process.stdin = type(fake_process.stdin)()  # reset buffer
-    def raise_large(url, user_id=None, progress_callback=None):
+    def raise_large(url, user_id=None, progress_callback=None, retry_callback=None):
         raise vh.FileTooLargeError('too big')
     monkeypatch.setattr(vh, 'process_video', raise_large)
     bot.handle_video_request('http://x', 'g', 'u', '+1', fake_process)
