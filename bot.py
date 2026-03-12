@@ -111,7 +111,13 @@ def handle_video_request(url, group_id, user_id, source_number, process):
             logger.info(f"File too large, sending heavy compression notification: {quip}")
             signal_manager.send_message(process, group_id, user_id, quip)
 
-        video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression)
+        # Define callback for yt-dlp update+retry notification
+        def notify_retry():
+            msg = "Hmm, that didn't work. Let me update my yt-dlp and try again... 🪗🔧"
+            logger.info("Download failed, notifying chat of yt-dlp update retry.")
+            signal_manager.send_message(process, group_id, user_id, msg)
+
+        video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression, retry_callback=notify_retry)
         # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service
         video_path, title, description, metadata_path, sub_path, service = video_data
         

@@ -329,7 +329,7 @@ def update_ytdlp():
         logger.error(f"Failed to update yt-dlp: {e}")
         return False
 
-def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
+def process_video(url, user_id="Unknown", retry=True, progress_callback=None, retry_callback=None):
     """Main workflow for a video URL. Returns (file_path, title, description, metadata_path, sub_path)."""
     # 1. Check Archive
     archived_path = check_archive(url)
@@ -355,20 +355,21 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None):
     import uuid
     temp_dir = os.path.join(os.getcwd(), f'temp_download_{uuid.uuid4().hex}')
     try:
-        # 2. Extract Info
-        info = get_video_info(url)
-        title = info.get("title", "")
-        description = info.get("description", "")
-
-        # 3. Download
+        # 2. Extract Info + 3. Download (wrapped together for yt-dlp update retry)
         try:
+            info = get_video_info(url)
+            title = info.get("title", "")
+            description = info.get("description", "")
+
             downloaded_path = download_video(url, temp_dir)
         except DownloadError as e:
             if retry:
-                logger.warning(f"Download failed: {e}. Attempting yt-dlp update and retry...")
+                logger.warning(f"Failed: {e}. Attempting yt-dlp update and retry...")
+                if retry_callback:
+                    retry_callback()
                 update_ytdlp()
                 time.sleep(2)
-                return process_video(url, user_id=user_id, retry=False, progress_callback=progress_callback)
+                return process_video(url, user_id=user_id, retry=False, progress_callback=progress_callback, retry_callback=retry_callback)
             else:
                 raise
 
