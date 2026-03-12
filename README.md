@@ -78,6 +78,24 @@ Simply press **`Ctrl+C`** in the terminal window. This works on Windows, Mac, an
 -   `personality.py`: The brains behind the quips and polka-tastic attitude!
 -   `config.py`: Loads settings from `.env`.
 
+## Docker Images
+
+Al YankoVid is published to the GitHub Container Registry (GHCR) and updated automatically on every push to `main`.
+
+| Tag | Image | When it updates |
+|---|---|---|
+| `stable` | `ghcr.io/kjburnett/al-yankovid:stable` | Only when a versioned release is tagged (e.g. `v1.0.1`) |
+| `latest` | `ghcr.io/kjburnett/al-yankovid:latest` | Every merge to `main` |
+| `v1.0.1` | `ghcr.io/kjburnett/al-yankovid:v1.0.1` | Pinned to a specific release |
+
+**Recommendation**: Use `:stable`. It only updates when a release is intentionally cut, so you won't be caught off guard by work-in-progress changes from `main`. Use `:latest` at your own risk — it always reflects the bleeding edge.
+
+### Updating your container (unRAID)
+
+Once your container is configured with a GHCR image, updating is one click: **Docker → al-yankovid → Update Container**. No tarballs, no manual steps.
+
+---
+
 ## Migration & Deployment Notes (unRAID)
 
 This repository was migrated to an unRAID container during development. Key actions and commands used during the migration are recorded here so you can reproduce the same setup.
@@ -128,32 +146,29 @@ docker run -d --name al-yankovid --restart unless-stopped \
 
 After start: verify with `docker logs -f al-yankovid` and ensure the bot reports "Signal-cli daemon started, waiting for messages".
 
-4) Pushing code changes and images to GitHub / Docker Hub (recommended workflow)
-- Create a branch for your changes:
+4) Pushing code changes (recommended workflow)
+- Create a branch for your changes using the convention `user/kjburnett/{featurename}`:
 
 ```bash
-git checkout -b feature/unraid-migration
-# Make changes (Dockerfile, entrypoint.sh, compose, docs)
+git checkout -b user/kjburnett/my-feature
+# Make changes, then:
 git add .
-# Always check for sensitive files before committing
-git status --short
-git diff --staged
-# If any sensitive files are staged, remove them: git reset <path> or git rm --cached <path>
-
-git commit -m "Add unRAID migration docs and Docker adjustments"
-git push origin feature/unraid-migration
-# Open a Pull Request on GitHub and review changes (especially ensure data/ and archive/ are not included)
+git commit -m "Description of changes"
+git push origin user/kjburnett/my-feature
+# Open a Pull Request on GitHub and merge to main
 ```
 
-- (Optional) Publish Docker image to a registry so you can `docker pull` on unRAID instead of loading a tar:
+Merging to `main` automatically builds and publishes `:latest` via GitHub Actions.
+
+- **Cutting a stable release**: Once `main` is in a good state, tag it with a version number. This updates both `:stable` and the pinned version tag (e.g. `:1.0.1`):
 
 ```bash
-# Tag and push to GHCR (GitHub Container Registry)
-docker tag al-yankovid:latest ghcr.io/kjburnett/al-yankovid:latest
-docker push ghcr.io/kjburnett/al-yankovid:latest
+git checkout main && git pull
+git tag v1.0.1
+git push --tags
 ```
 
-- In GitHub, create a release or connect Docker Hub automated builds to your repository to publish images on merge.
+That's it — GitHub Actions picks up the tag push and handles the rest.
 
 5) Final checklist before merging
 - Verify `.gitignore` excludes `data/`, `archive/`, `.env` and any local-only artifacts.
