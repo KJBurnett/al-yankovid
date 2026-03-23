@@ -61,7 +61,7 @@ def test_handle_video_request_success_path(tmp_env, fake_process, monkeypatch, t
 
     # stub process_video
     def fake_process_video(url, user_id=None, progress_callback=None, retry_callback=None):
-        return (str(v), 'T', 'D', None, None, 'YouTube')
+        return (str(v), 'T', 'D', None, None, 'YouTube', True)
     monkeypatch.setattr(vh, 'process_video', fake_process_video)
 
     # stub personality
@@ -81,6 +81,30 @@ def test_handle_video_request_success_path(tmp_env, fake_process, monkeypatch, t
     assert 'ACK' in out
     assert 'QUIP' in out
     assert called.get('called', False)
+
+
+def test_handle_video_request_mentions_silent_video(tmp_env, fake_process, monkeypatch, tmp_path):
+    bot = importlib.import_module('bot')
+    importlib.reload(bot)
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+    v = tmp_path / 'video.mp4'
+    v.write_text('x')
+
+    def fake_process_video(url, user_id=None, progress_callback=None, retry_callback=None):
+        return (str(v), 'T', 'D', None, None, 'TikTok', False)
+    monkeypatch.setattr(vh, 'process_video', fake_process_video)
+
+    pers = importlib.import_module('personality')
+    monkeypatch.setattr(pers, 'get_ack', lambda: 'ACK')
+    monkeypatch.setattr(pers, 'get_quip', lambda: 'QUIP')
+
+    sm = importlib.import_module('stats_manager')
+    monkeypatch.setattr(sm, 'log_archive', lambda *a, **k: None)
+
+    bot.handle_video_request('http://x', 'g', 'u', '+1', fake_process)
+    out = fake_process.stdin.getvalue()
+    assert 'came through without an audio stream' in out
 
 
 def test_handle_video_request_failure_paths(tmp_env, fake_process, monkeypatch):
