@@ -106,7 +106,7 @@ def download_video(url, output_dir):
         # + Subtitles (English preferred, but any will do)
         command = [
             YT_DLP_CMD, 
-            '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', 
+            '-f', 'bestvideo*+bestaudio*/best*[acodec!=none]/best',
             '-o', output_template, 
             '--merge-output-format', 'mp4',
             '--write-subs', '--write-auto-subs', '--sub-langs', 'en,.*',
@@ -164,6 +164,22 @@ def archive_metadata(archive_dir, info):
 
 def get_file_size_mb(path):
     return os.path.getsize(path) / (1024 * 1024)
+
+def has_audio_stream(path):
+    """Returns True when ffprobe sees at least one audio stream."""
+    try:
+        probe = safe_subprocess_run([
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'a',
+            '-show_entries', 'stream=index',
+            '-of', 'csv=p=0',
+            path
+        ], capture_output=True, text=True, check=True, encoding='utf-8')
+        return bool(probe.stdout.strip())
+    except Exception as e:
+        logger.warning(f"Audio stream probe failed for {path}: {e}")
+        # Default to True on probe failure so we do not warn users spuriously.
+        return True
 
 def load_archive_index():
     index_path = os.path.join(ARCHIVE_ROOT, 'index.json')
@@ -241,10 +257,12 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
             command = [
                 FFMPEG_CMD, '-y',
                 '-i', input_path,
+                '-map', '0:v:0',
                 '-c:v', 'libx264',
                 '-b:v', str(int(video_bitrate)),
                 '-pass', '1',
                 '-passlogfile', pass_log_prefix,
+                '-an',
                 '-f', 'mp4',
                 '-movflags', '+faststart',
                 '-pix_fmt', 'yuv420p',
@@ -259,12 +277,16 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
             command = [
                 FFMPEG_CMD, '-y',
                 '-i', input_path,
+                '-map', '0:v:0',
+                '-map', '0:a:0?',
                 '-c:v', 'libx264',
                 '-b:v', str(int(video_bitrate)),
                 '-pass', '2',
                 '-passlogfile', pass_log_prefix,
                 '-c:a', 'aac',
                 '-b:a', '128k',
+                '-ac', '2',
+                '-ar', '48000',
                 '-movflags', '+faststart',
                 '-pix_fmt', 'yuv420p',
                 output_path
@@ -330,7 +352,7 @@ def update_ytdlp():
         return False
 
 def process_video(url, user_id="Unknown", retry=True, progress_callback=None, retry_callback=None):
-    """Main workflow for a video URL. Returns (file_path, title, description, metadata_path, sub_path)."""
+    """Main workflow for a video URL."""
     # 1. Check Archive
     archived_path = check_archive(url)
     if archived_path and os.path.exists(archived_path):
@@ -349,7 +371,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
             except: pass
             
         sub_path = find_subtitle_file(archive_dir, os.path.basename(archived_path))
-        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path, service
+        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path, service, has_audio_stream(archived_path)
 
     # Unique temp dir for concurrency
     import uuid
@@ -374,7 +396,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
                 raise
 
         if not downloaded_path:
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, True
 
         # 4. Normalize/Compress
         final_path = compress_video(downloaded_path, MAX_SIZE_MB, force_normalize=True)
@@ -420,7 +442,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
         index[url] = archived_file_path
         save_archive_index(index)
         
-        return archived_file_path, title, description, metadata_path, archived_sub_path, service
+        return archived_file_path, title, description, metadata_path, archived_sub_path, service, has_audio_stream(archived_file_path)
 
     except Exception as e:
         logger.error(f"Failed to process video {url}: {e}", exc_info=True)

@@ -118,8 +118,8 @@ def handle_video_request(url, group_id, user_id, source_number, process):
             signal_manager.send_message(process, group_id, user_id, msg)
 
         video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression, retry_callback=notify_retry)
-        # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service
-        video_path, title, description, metadata_path, sub_path, service = video_data
+        # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service, has_audio
+        video_path, title, description, metadata_path, sub_path, service, has_audio = video_data
         
         if video_path and os.path.exists(video_path):
             # Construct formatted message
@@ -137,6 +137,9 @@ def handle_video_request(url, group_id, user_id, source_number, process):
                 display_description = description.strip() if description and description.strip() else "N/A"
                 msg_parts.append(f"== Title ==\n{display_title}")
                 msg_parts.append(f"== Description ==\n{display_description}")
+
+            if not has_audio:
+                msg_parts.append("Accordion autopsy: this version of the video came through without an audio stream, so it'll play silent.")
             
             final_message = "\n\n".join(msg_parts)
             
