@@ -96,11 +96,44 @@ def test_get_video_info_parses_json(tmp_env, monkeypatch):
     assert info.get('id') == 'abc'
 
 
+def test_has_audio_stream_detects_audio(tmp_env, monkeypatch):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+
+    def fake_safe(cmd, **kwargs):
+        class R: pass
+        r = R()
+        r.stdout = '0\n'
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    assert vh.has_audio_stream('/tmp/video.mp4') is True
+
+
+def test_has_audio_stream_detects_silence(tmp_env, monkeypatch):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+
+    def fake_safe(cmd, **kwargs):
+        class R: pass
+        r = R()
+        r.stdout = ''
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    assert vh.has_audio_stream('/tmp/video.mp4') is False
+
+
 def test_download_video_returns_expected_path(tmp_env, monkeypatch, tmp_path):
     vh = importlib.import_module('video_handler')
     importlib.reload(vh)
     out_dir = str(tmp_path / 'out')
     os.makedirs(out_dir, exist_ok=True)
+    seen = {}
 
     # stub get_video_info to return id
     def fake_get(url):
@@ -113,6 +146,7 @@ def test_download_video_returns_expected_path(tmp_env, monkeypatch, tmp_path):
 
     # stub safe_subprocess_run to not fail
     def fake_safe(cmd, **kwargs):
+        seen['download_cmd'] = cmd
         class R: pass
         r = R()
         r.stdout = ''
@@ -124,6 +158,7 @@ def test_download_video_returns_expected_path(tmp_env, monkeypatch, tmp_path):
     res = vh.download_video('http://x', out_dir)
     assert res is not None
     assert res.endswith('.mp4')
+    assert seen['download_cmd'][2] == 'bestvideo*+bestaudio*/best*[acodec!=none]/best'
 
 
 def test_compress_video_with_successful_ffmpeg_calls(tmp_env, monkeypatch, tmp_path):
@@ -131,8 +166,10 @@ def test_compress_video_with_successful_ffmpeg_calls(tmp_env, monkeypatch, tmp_p
     importlib.reload(vh)
     in_file = str(tmp_path / 'in.mp4')
     open(in_file, 'wb').write(b'x' * 1024)
+    commands = []
 
     def fake_safe(cmd, **kwargs):
+        commands.append(cmd)
         class R: pass
         if 'ffprobe' in cmd[0]:
             r = R(); r.stdout = '60\n50000000'; r.stderr = ''; r.returncode = 0; return r
@@ -141,6 +178,15 @@ def test_compress_video_with_successful_ffmpeg_calls(tmp_env, monkeypatch, tmp_p
     monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
     out = vh.compress_video(in_file, target_size_mb=10)
     assert out.endswith('_normalized.mp4')
+    pass1 = commands[1]
+    pass2 = commands[2]
+    assert pass1[:5] == ['ffmpeg', '-y', '-i', in_file, '-map']
+    assert '-an' in pass1
+    assert '-map' in pass2
+    assert '0:a:0?' in pass2
+    assert '-c:a' in pass2
+    assert '-ac' in pass2
+    assert '-ar' in pass2
 
 
 def test_process_video_archives_and_updates_index(tmp_env, monkeypatch, tmp_path):
@@ -165,11 +211,14 @@ def test_process_video_archives_and_updates_index(tmp_env, monkeypatch, tmp_path
     # stub compress to return same path
     monkeypatch.setattr(vh, 'compress_video', lambda p, *a, **k: p)
 
-    archived_path, title, description, metadata_path, sub_path, service = vh.process_video(url, user_id='tester')
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: True)
+
+    archived_path, title, description, metadata_path, sub_path, service, has_audio = vh.process_video(url, user_id='tester')
     # index should contain url
     idx = vh.load_archive_index()
     assert url in idx
     assert os.path.exists(idx[url])
+    assert has_audio is True
 
 
 def test_process_video_oversize_raises_FileTooLargeError(tmp_env, monkeypatch, tmp_path):
