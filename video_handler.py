@@ -7,6 +7,7 @@ import shutil
 import sys
 import logging
 import time
+from shutil import which
 from config import ARCHIVE_ROOT, MAX_SIZE_MB, UPLOAD_LIMIT_MB
 
 class FileTooLargeError(Exception):
@@ -45,23 +46,46 @@ class DownloadError(VideoHandlerError):
     pass
 
 # Configuration
-YT_DLP_CMD = os.path.join(sys.prefix, 'Scripts', 'yt-dlp.exe')
+YT_DLP_CMD = None
 FFMPEG_CMD = 'ffmpeg'
 
 logger = logging.getLogger("AlYankoVid.VideoHandler")
+
+def resolve_ytdlp_cmd():
+    """Find a runnable yt-dlp command across local venvs, PATH, or module execution."""
+    global YT_DLP_CMD
+    candidates = [
+        [os.path.join(sys.prefix, 'Scripts', 'yt-dlp.exe')],
+        [os.path.join(sys.prefix, 'bin', 'yt-dlp')],
+        ['yt-dlp'],
+        [sys.executable, '-m', 'yt_dlp'],
+    ]
+
+    for candidate in candidates:
+        executable = candidate[0]
+        if os.path.sep in executable and not os.path.exists(executable):
+            continue
+        if executable == 'yt-dlp' and which('yt-dlp') is None:
+            continue
+        try:
+            safe_subprocess_run(candidate + ['--version'], capture_output=True, check=True, encoding='utf-8')
+            YT_DLP_CMD = candidate
+            return candidate
+        except Exception:
+            continue
+
+    YT_DLP_CMD = None
+    raise RuntimeError("Missing required dependency: yt-dlp")
 
 def check_dependencies():
     """Checks if required tools are installed."""
     missing = []
     
     # Check yt-dlp
-    if not os.path.exists(YT_DLP_CMD):
-        # Try just 'yt-dlp' if the venv path fails
-        try:
-            safe_subprocess_run(['yt-dlp', '--version'], capture_output=True, check=True, encoding='utf-8')
-            globals()['YT_DLP_CMD'] = 'yt-dlp'
-        except:
-            missing.append("yt-dlp")
+    try:
+        resolve_ytdlp_cmd()
+    except Exception:
+        missing.append("yt-dlp")
             
     # Check ffmpeg
     try:
@@ -80,7 +104,7 @@ def clean_filename(title):
 def get_video_info(url):
     """Retrieves video metadata using yt-dlp."""
     try:
-        command = [YT_DLP_CMD, '-J', url]
+        command = resolve_ytdlp_cmd() + ['-J', url]
         result = safe_subprocess_run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
@@ -104,8 +128,7 @@ def download_video(url, output_dir):
     try:
         # Download format: best video+audio that is mp4 compatible or anything else we can merge
         # + Subtitles (English preferred, but any will do)
-        command = [
-            YT_DLP_CMD, 
+        command = resolve_ytdlp_cmd() + [
             '-f', 'bestvideo*+bestaudio*/best*[acodec!=none]/best',
             '-o', output_template, 
             '--merge-output-format', 'mp4',
@@ -345,6 +368,7 @@ def update_ytdlp():
     logger.info("Attempting to update yt-dlp...")
     try:
         safe_subprocess_run([sys.executable, '-m', 'pip', 'install', '-U', 'yt-dlp'], check=True, capture_output=True, encoding='utf-8')
+        resolve_ytdlp_cmd()
         logger.info("yt-dlp updated successfully.")
         return True
     except Exception as e:

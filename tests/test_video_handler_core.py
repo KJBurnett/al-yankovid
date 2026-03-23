@@ -1,6 +1,7 @@
 import os
 import json
 import importlib
+import sys
 
 
 def test_clean_filename(tmp_env):
@@ -96,6 +97,27 @@ def test_get_video_info_parses_json(tmp_env, monkeypatch):
     assert info.get('id') == 'abc'
 
 
+def test_resolve_ytdlp_cmd_falls_back_to_python_module(tmp_env, monkeypatch):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+
+    def fake_safe(cmd, **kwargs):
+        assert cmd == [sys.executable, '-m', 'yt_dlp', '--version']
+        class R: pass
+        r = R()
+        r.stdout = '2026.01.01'
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'which', lambda name: None)
+    monkeypatch.setattr(vh.os.path, 'exists', lambda path: path == sys.executable)
+
+    cmd = vh.resolve_ytdlp_cmd()
+    assert cmd == [sys.executable, '-m', 'yt_dlp']
+
+
 def test_has_audio_stream_detects_audio(tmp_env, monkeypatch):
     vh = importlib.import_module('video_handler')
     importlib.reload(vh)
@@ -158,7 +180,7 @@ def test_download_video_returns_expected_path(tmp_env, monkeypatch, tmp_path):
     res = vh.download_video('http://x', out_dir)
     assert res is not None
     assert res.endswith('.mp4')
-    assert seen['download_cmd'][2] == 'bestvideo*+bestaudio*/best*[acodec!=none]/best'
+    assert 'bestvideo*+bestaudio*/best*[acodec!=none]/best' in seen['download_cmd']
 
 
 def test_compress_video_with_successful_ffmpeg_calls(tmp_env, monkeypatch, tmp_path):
