@@ -2,6 +2,7 @@ import pytest
 import io
 import os
 import sys
+import importlib
 
 # Ensure repository root is in sys.path so tests can import project modules even when cwd changes
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -55,3 +56,25 @@ def fake_process():
 @pytest.fixture
 def make_subprocess_result():
     return _make_completed
+
+
+@pytest.fixture
+def integration_archive(tmp_path, monkeypatch):
+    """
+    Provides a fresh, isolated ARCHIVE_ROOT for integration tests.
+    Each test run gets a clean archive directory, preventing false positives
+    from cached downloads being served instead of actually downloading.
+    Auto-cleaned by pytest's tmp_path after the test.
+    """
+    import config
+    archive_dir = tmp_path / 'integration_archive'
+    archive_dir.mkdir()
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    monkeypatch.setattr(config, 'ARCHIVE_ROOT', str(archive_dir))
+    monkeypatch.setattr(config, 'DATA_DIR', str(data_dir))
+    monkeypatch.setattr(config, 'STATS_FILE', str(data_dir / 'stats.json'))
+    # Reload video_handler so it picks up the patched ARCHIVE_ROOT
+    import video_handler
+    importlib.reload(video_handler)
+    yield str(archive_dir)
