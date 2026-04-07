@@ -10,3 +10,14 @@ NUL
 data/
 stats.json
 users_map.json
+al-yankovid.tar
+
+# Local tool caches / machine-specific artifacts (can contain sensitive URLs/metadata)
+tools/.repair_silent_archives_cache.json
+tools/*.cache.json
+tools/*.local.json
+
+# Local manual verification downloads
+temp_manual_audio_check/
+temp_*_audio_check/
+temp_download_*/
