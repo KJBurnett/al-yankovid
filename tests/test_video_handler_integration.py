@@ -28,3 +28,55 @@ def test_youtube_shorts_download_has_audio():
         assert vh.has_audio_stream(path) is True
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# Instagram reel that was previously reported as downloading muted/silent.
+# The URL below is the specific reel used to surface the bug.
+INSTAGRAM_REEL_URL = os.getenv(
+    "INSTAGRAM_REEL_TEST_URL",
+    "https://www.instagram.com/reel/DXEweNQjXRd/?igsh=MWp3aTE0dzVrZmhydQ==",
+)
+
+
+@pytest.mark.skipif(not _network_tests_enabled(), reason="Set RUN_NETWORK_TESTS=1 to enable network integration tests")
+def test_instagram_reel_get_video_info_returns_metadata():
+    """Verify yt-dlp can extract metadata from the Instagram reel without error."""
+    vh = importlib.import_module("video_handler")
+    importlib.reload(vh)
+
+    info = vh.get_video_info(INSTAGRAM_REEL_URL)
+
+    assert info, "get_video_info returned empty/None for Instagram reel"
+    assert info.get("id"), "Expected a non-empty video ID in metadata"
+    assert info.get("extractor_key", "").lower() in (
+        "instagram", "instagramstory", "instagramigtv",
+    ), f"Unexpected extractor_key: {info.get('extractor_key')}"
+
+
+@pytest.mark.skipif(not _network_tests_enabled(), reason="Set RUN_NETWORK_TESTS=1 to enable network integration tests")
+def test_instagram_reel_download_has_audio():
+    """Regression test: Instagram reel must download with an audio stream (not muted).
+
+    This test was added after a report that the bot was uploading silent/muted
+    videos for Instagram reels. It exercises the full yt-dlp download + format
+    fallback chain and asserts that the resulting file has an audio stream.
+    """
+    vh = importlib.import_module("video_handler")
+    importlib.reload(vh)
+
+    temp_dir = tempfile.mkdtemp(prefix="integration_ig_reel_")
+    try:
+        info = vh.get_video_info(INSTAGRAM_REEL_URL)
+        assert info and info.get("id"), "Could not fetch Instagram reel metadata"
+
+        path = vh.download_video(INSTAGRAM_REEL_URL, temp_dir, video_id=info.get("id"))
+
+        assert path is not None, "download_video returned None — no file was produced"
+        assert os.path.exists(path), f"Expected downloaded file at {path!r} but it does not exist"
+        assert path.endswith(".mp4"), f"Expected an MP4 file, got: {path!r}"
+        assert vh.has_audio_stream(path) is True, (
+            f"Downloaded Instagram reel has no audio stream — the video would be muted when sent. "
+            f"File: {path!r}"
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
