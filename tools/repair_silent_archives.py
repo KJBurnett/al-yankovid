@@ -80,6 +80,10 @@ def extract_archive_relative_path(raw_path):
     return None
 
 
+def normalize_rel_key(path_value):
+    return str(path_value).replace("\\", "/").lstrip("/")
+
+
 def load_index_lookup(archive_root):
     index_path = Path(archive_root) / "index.json"
     if not index_path.exists():
@@ -95,8 +99,8 @@ def load_index_lookup(archive_root):
         if not rel_path:
             continue
         rel_path = Path(rel_path)
-        by_file[str(rel_path)] = url
-        by_folder[str(rel_path.parent)] = url
+        by_file[normalize_rel_key(rel_path)] = url
+        by_folder[normalize_rel_key(rel_path.parent)] = url
 
     return by_file, by_folder
 
@@ -172,10 +176,15 @@ def resolve_original_url(folder, video_path, file_index, folder_index):
     rel_file = str(video_path.relative_to(folder.parents[1]))
     rel_folder = str(folder.relative_to(folder.parents[1]))
 
-    if rel_file in file_index:
-        return file_index[rel_file], "index:file"
-    if rel_folder in folder_index:
-        return folder_index[rel_folder], "index:folder"
+    file_keys = [rel_file, normalize_rel_key(rel_file), rel_file.replace("/", "\\")]
+    folder_keys = [rel_folder, normalize_rel_key(rel_folder), rel_folder.replace("/", "\\")]
+
+    for key in file_keys:
+        if key in file_index:
+            return file_index[key], "index:file"
+    for key in folder_keys:
+        if key in folder_index:
+            return folder_index[key], "index:folder"
 
     return None, None
 
