@@ -1,6 +1,7 @@
 import json
 import importlib
 import queue
+import threading
 
 
 def test_process_incoming_message_queues_and_handles_yank(tmp_env, fake_process, monkeypatch):
@@ -136,3 +137,36 @@ def test_handle_video_request_failure_paths(tmp_env, fake_process, monkeypatch):
     bot.handle_video_request('http://x', 'g', 'u', '+1', fake_process)
     out2 = fake_process.stdin.getvalue()
     assert 'Accordion' in out2 or 'too big' in out2
+
+
+def test_classify_signal_error_detects_compatibility(tmp_env):
+    bot = importlib.import_module('bot')
+    importlib.reload(bot)
+
+    is_account_fatal, is_compat_issue = bot._classify_signal_error(
+        "java.lang.NoSuchMethodError: something changed"
+    )
+    assert not is_account_fatal
+    assert is_compat_issue
+
+
+def test_monitor_stderr_logs_update_guidance_once_per_cycle(tmp_env, monkeypatch):
+    bot = importlib.import_module('bot')
+    importlib.reload(bot)
+
+    bot.shutdown_event = threading.Event()
+    daemon_shutdown = threading.Event()
+
+    class FakeProc:
+        stderr = [
+            "java.lang.NoSuchMethodError: foo\n",
+            "Unknown version response\n",
+        ]
+
+    called = {"count": 0}
+    monkeypatch.setattr(bot, "_log_signal_cli_update_guidance", lambda: called.__setitem__("count", called["count"] + 1))
+
+    bot.monitor_stderr(FakeProc(), daemon_shutdown)
+    assert called["count"] == 1
+    assert daemon_shutdown.is_set()
+    assert bot.shutdown_event.is_set()

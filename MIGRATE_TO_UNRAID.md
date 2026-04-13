@@ -48,6 +48,6 @@ Troubleshooting notes
 - If messages are missing attachments, check `ffmpeg` availability and that compression succeeded (files under upload limit).
 
 If you'd like, I can now:
-- Update the Dockerfile to pin Java to a specific tested package (e.g., openjdk-21),
+- Update the Dockerfile to pin Java to a specific tested runtime (current signal-cli requires JRE 25),
 - Add PUID/PGID handling in `entrypoint.sh`, and
 - Create a ready-to-import UnRAID Docker template JSON (if you provide target PUID/PGID and host paths).

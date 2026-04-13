@@ -11,7 +11,7 @@ A whacky Signal bot that listens for `Yank {url}` commands or `@mentions`, downl
 - **Resilient**: Auto-restarts if the Signal daemon crashes.
 
 ## Prerequisites
-- **Java 21+**: Required for `signal-cli`.
+- **Java 25+**: Required for current `signal-cli` releases (e.g., `v0.14.2`).
 - **FFmpeg**: Required for video optimization.
 - **Python 3.10+**: For the bot logic.
 
@@ -38,8 +38,8 @@ pip install -r requirements.txt
 
 ### 3. Signal-cli Installation
 1.  **Download**: Get the latest `signal-cli-x.xx.x.tar.gz` from the [official releases](https://github.com/AsamK/signal-cli/releases).
-2.  **Extract**: Extract the `.tar.gz` file into the repository root. You should see a folder like `signal-cli-0.13.23`.
-3.  **Configure**: Ensure the folder name match the version used in the following steps (and `signal_manager.py`).
+2.  **Extract**: Extract the `.tar.gz` file into the repository root. You should see a folder like `signal-cli-<version>`.
+3.  **Configure**: Set `SIGNAL_CLI_PATH` in `.env` to match your installed version (for example `./signal-cli-<version>/bin/signal-cli.bat`).
 
 ### 4. Signal-cli Setup (Important!)
 Al requires a separate Signal number. **Do not use your own number.**
@@ -47,15 +47,28 @@ Al requires a separate Signal number. **Do not use your own number.**
 2.  **Registering via CLI**:
     ```powershell
     # Register (replace +1234567890 with your bot's number)
-    .\signal-cli-0.13.23\bin\signal-cli.bat -u +1234567890 register
+    .\signal-cli-<version>\bin\signal-cli.bat -u +1234567890 register
     
     # Verify (enter the code sent to your phone)
-    .\signal-cli-0.13.23\bin\signal-cli.bat -u +1234567890 verify CODE
+    .\signal-cli-<version>\bin\signal-cli.bat -u +1234567890 verify CODE
     ```
 3.  **Set a Profile Name**:
     ```powershell
-    .\signal-cli-0.13.23\bin\signal-cli.bat -u +1234567890 updateProfile --name "Al YankoVid"
+    .\signal-cli-<version>\bin\signal-cli.bat -u +1234567890 updateProfile --name "Al YankoVid"
     ```
+
+### Docker signal-cli behavior
+- The Docker image resolves `SIGNAL_CLI_VERSION=latest` at build time by default.
+- The Docker image installs **Temurin JRE 25** by default to satisfy current `signal-cli` requirements.
+- You can pin a specific version when building:
+  ```bash
+  docker build --build-arg SIGNAL_CLI_VERSION=0.13.26 -t al-yankovid:custom .
+  ```
+- If logs show a likely signal-cli compatibility failure, refresh and recreate:
+  ```bash
+  docker compose pull
+  docker compose up -d --force-recreate
+  ```
 
 ## Usage
 
@@ -136,7 +149,7 @@ docker run -d --name al-yankovid --restart unless-stopped \
   -e BOT_NUMBER='+16014365901' \
   -e SIGNAL_CLI_CONFIG_DIR=/app/data \
   -e SIGNAL_CLI_PATH=/opt/signal-cli/bin/signal-cli \
-  -e JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
+  -e JAVA_HOME=/opt/java \
   -e PUID=0 -e PGID=0 -e TZ='America/Los_Angeles' \
   -v /mnt/user/appdata/al-yankovid/data:/app/data:rw \
   -v /mnt/user/drivepool/Containers/al-yankovid/archive:/app/archive:rw \
