@@ -15,16 +15,27 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up Signal-CLI environment
-ENV SIGNAL_CLI_VERSION=0.13.23
+ARG SIGNAL_CLI_VERSION=latest
+ENV SIGNAL_CLI_VERSION=${SIGNAL_CLI_VERSION}
 ENV SIGNAL_CLI_HOME=/opt/signal-cli
 ENV PATH=$PATH:$SIGNAL_CLI_HOME/bin
 
 # Install signal-cli from GitHub releases
-RUN wget -q "https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz" \
-    -O /tmp/signal-cli.tar.gz \
-    && tar -xzf /tmp/signal-cli.tar.gz -C /opt/ \
-    && mv /opt/signal-cli-${SIGNAL_CLI_VERSION} /opt/signal-cli \
-    && rm /tmp/signal-cli.tar.gz
+RUN set -eux; \
+    resolved_version="${SIGNAL_CLI_VERSION}"; \
+    if [ "${resolved_version}" = "latest" ]; then \
+      resolved_version="$(curl -fsSL https://api.github.com/repos/AsamK/signal-cli/releases/latest | sed -n 's/.*"tag_name": "v\([0-9][^"]*\)".*/\1/p' | head -n1)"; \
+    fi; \
+    if [ -z "${resolved_version}" ]; then \
+      echo "Failed to resolve signal-cli version." >&2; \
+      exit 1; \
+    fi; \
+    wget -q "https://github.com/AsamK/signal-cli/releases/download/v${resolved_version}/signal-cli-${resolved_version}.tar.gz" -O /tmp/signal-cli.tar.gz; \
+    tar -xzf /tmp/signal-cli.tar.gz -C /opt/; \
+    mv "/opt/signal-cli-${resolved_version}" /opt/signal-cli; \
+    rm /tmp/signal-cli.tar.gz; \
+    echo "${resolved_version}" > /opt/signal-cli/VERSION; \
+    echo "Installed signal-cli version: ${resolved_version}"
 
 # Verify signal-cli installation
 RUN signal-cli --version
