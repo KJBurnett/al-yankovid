@@ -1,4 +1,6 @@
 import json
+import importlib
+import os
 
 
 def test_send_message_direct_recipient_builds_payload(fake_process):
@@ -21,3 +23,55 @@ def test_send_message_group_recipient(fake_process):
     payload = json.loads(val)
     assert payload['params']['groupId'] == 'group-id'
     assert 'recipient' not in payload['params']
+
+
+def test_run_signal_daemon_drops_invalid_java_home(monkeypatch):
+    signal_manager = importlib.import_module('signal_manager')
+    importlib.reload(signal_manager)
+
+    monkeypatch.setattr(signal_manager, 'JAVA_HOME', '/definitely/not/real')
+    monkeypatch.setattr(signal_manager.os.path, 'isdir', lambda p: False)
+    monkeypatch.setattr(signal_manager, 'SIGNAL_CLI_PATH', 'signal-cli')
+    monkeypatch.setattr(signal_manager, 'BOT_NUMBER', '+123')
+
+    captured = {}
+
+    def fake_popen(*args, **kwargs):
+        captured['env'] = kwargs.get('env', {})
+        class P:
+            stdin = None
+            stdout = None
+            stderr = None
+            def poll(self):
+                return None
+        return P()
+
+    monkeypatch.setattr(signal_manager.subprocess, 'Popen', fake_popen)
+    signal_manager.run_signal_daemon()
+    assert captured['env'].get('JAVA_HOME') is None
+
+
+def test_run_signal_daemon_keeps_valid_java_home(monkeypatch):
+    signal_manager = importlib.import_module('signal_manager')
+    importlib.reload(signal_manager)
+
+    monkeypatch.setattr(signal_manager, 'JAVA_HOME', '/valid/java/home')
+    monkeypatch.setattr(signal_manager.os.path, 'isdir', lambda p: p == '/valid/java/home')
+    monkeypatch.setattr(signal_manager, 'SIGNAL_CLI_PATH', 'signal-cli')
+    monkeypatch.setattr(signal_manager, 'BOT_NUMBER', '+123')
+
+    captured = {}
+
+    def fake_popen(*args, **kwargs):
+        captured['env'] = kwargs.get('env', {})
+        class P:
+            stdin = None
+            stdout = None
+            stderr = None
+            def poll(self):
+                return None
+        return P()
+
+    monkeypatch.setattr(signal_manager.subprocess, 'Popen', fake_popen)
+    signal_manager.run_signal_daemon()
+    assert captured['env'].get('JAVA_HOME') == '/valid/java/home'
