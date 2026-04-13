@@ -1,6 +1,8 @@
 import os
 import json
 import importlib
+import sys
+import subprocess
 
 
 def test_clean_filename(tmp_env):
@@ -96,6 +98,27 @@ def test_get_video_info_parses_json(tmp_env, monkeypatch):
     assert info.get('id') == 'abc'
 
 
+def test_resolve_ytdlp_cmd_falls_back_to_python_module(tmp_env, monkeypatch):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+
+    def fake_safe(cmd, **kwargs):
+        assert cmd == [sys.executable, '-m', 'yt_dlp', '--version']
+        class R: pass
+        r = R()
+        r.stdout = '2026.01.01'
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'which', lambda name: None)
+    monkeypatch.setattr(vh.os.path, 'exists', lambda path: path == sys.executable)
+
+    cmd = vh.resolve_ytdlp_cmd()
+    assert cmd == [sys.executable, '-m', 'yt_dlp']
+
+
 def test_has_audio_stream_detects_audio(tmp_env, monkeypatch):
     vh = importlib.import_module('video_handler')
     importlib.reload(vh)
@@ -128,25 +151,26 @@ def test_has_audio_stream_detects_silence(tmp_env, monkeypatch):
     assert vh.has_audio_stream('/tmp/video.mp4') is False
 
 
-def test_download_video_returns_expected_path(tmp_env, monkeypatch, tmp_path):
+def test_download_video_prefers_first_audio_selector(tmp_env, monkeypatch, tmp_path):
     vh = importlib.import_module('video_handler')
     importlib.reload(vh)
     out_dir = str(tmp_path / 'out')
     os.makedirs(out_dir, exist_ok=True)
-    seen = {}
 
-    # stub get_video_info to return id
     def fake_get(url):
         return {'id': 'XYZ'}
     monkeypatch.setattr(vh, 'get_video_info', fake_get)
+    monkeypatch.setattr(vh, 'resolve_ytdlp_cmd', lambda: ['yt-dlp'])
 
-    # create a matching file that download_video would discover
-    path = os.path.join(out_dir, 'Any Title [XYZ].mp4')
-    open(path, 'wb').write(b'x')
+    seen_selectors = []
 
-    # stub safe_subprocess_run to not fail
     def fake_safe(cmd, **kwargs):
-        seen['download_cmd'] = cmd
+        if '-f' in cmd:
+            selector = cmd[cmd.index('-f') + 1]
+            seen_selectors.append(selector)
+            path = os.path.join(out_dir, 'Any Title [XYZ].mp4')
+            with open(path, 'wb') as f:
+                f.write(b'x')
         class R: pass
         r = R()
         r.stdout = ''
@@ -154,11 +178,163 @@ def test_download_video_returns_expected_path(tmp_env, monkeypatch, tmp_path):
         r.returncode = 0
         return r
     monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: True)
 
     res = vh.download_video('http://x', out_dir)
     assert res is not None
     assert res.endswith('.mp4')
-    assert seen['download_cmd'][2] == 'bestvideo*+bestaudio*/best*[acodec!=none]/best'
+    assert seen_selectors == [vh.FORMAT_SELECTORS[0]]
+
+
+def test_download_video_retries_when_first_attempt_silent(tmp_env, monkeypatch, tmp_path):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+    out_dir = str(tmp_path / 'out')
+    os.makedirs(out_dir, exist_ok=True)
+
+    monkeypatch.setattr(vh, 'get_video_info', lambda url: {'id': 'XYZ'})
+    monkeypatch.setattr(vh, 'resolve_ytdlp_cmd', lambda: ['yt-dlp'])
+
+    seen_selectors = []
+    created_paths = []
+
+    def fake_safe(cmd, **kwargs):
+        if '-f' in cmd:
+            selector = cmd[cmd.index('-f') + 1]
+            seen_selectors.append(selector)
+            path = os.path.join(out_dir, f'Any Title [XYZ]_{len(seen_selectors)}.mp4')
+            created_paths.append(path)
+            with open(path, 'wb') as f:
+                f.write(b'x')
+        class R: pass
+        r = R()
+        r.stdout = ''
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    has_audio_results = [False, True]
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: has_audio_results.pop(0))
+
+    res = vh.download_video('http://x', out_dir)
+    assert res is not None
+    assert os.path.exists(res)
+    assert len(seen_selectors) == 2
+    assert seen_selectors[0] == vh.FORMAT_SELECTORS[0]
+    assert seen_selectors[1] == vh.FORMAT_SELECTORS[1]
+    assert not os.path.exists(created_paths[0])
+    assert os.path.exists(created_paths[1])
+
+
+def test_download_video_instagram_style_fallback_to_audio_pair(tmp_env, monkeypatch, tmp_path):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+    out_dir = str(tmp_path / 'out')
+    os.makedirs(out_dir, exist_ok=True)
+
+    monkeypatch.setattr(vh, 'get_video_info', lambda url: {'id': 'IG123'})
+    monkeypatch.setattr(vh, 'resolve_ytdlp_cmd', lambda: ['yt-dlp'])
+
+    selectors_seen = []
+    probe_paths = []
+
+    def fake_safe(cmd, **kwargs):
+        if '-f' in cmd:
+            selector = cmd[cmd.index('-f') + 1]
+            selectors_seen.append(selector)
+            path = os.path.join(out_dir, f'Video [IG123]_{len(selectors_seen)}.mp4')
+            with open(path, 'wb') as f:
+                f.write(b'x')
+        class R: pass
+        r = R()
+        r.stdout = ''
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    def fake_has_audio(path):
+        probe_paths.append(path)
+        # Simulate Instagram failure: first selector yields silent video-only stream.
+        return len(probe_paths) >= 2
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'has_audio_stream', fake_has_audio)
+
+    res = vh.download_video('https://www.instagram.com/reel/abc/', out_dir)
+    assert res is not None
+    assert len(selectors_seen) == 2
+    assert selectors_seen[:2] == vh.FORMAT_SELECTORS[:2]
+
+
+def test_download_video_all_silent_returns_last_attempt_file(tmp_env, monkeypatch, tmp_path):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+    out_dir = str(tmp_path / 'out')
+    os.makedirs(out_dir, exist_ok=True)
+
+    monkeypatch.setattr(vh, 'get_video_info', lambda url: {'id': 'XYZ'})
+    monkeypatch.setattr(vh, 'resolve_ytdlp_cmd', lambda: ['yt-dlp'])
+
+    created_paths = []
+
+    def fake_safe(cmd, **kwargs):
+        if '-f' in cmd:
+            path = os.path.join(out_dir, f'Any Title [XYZ]_{len(created_paths)}.mp4')
+            created_paths.append(path)
+            with open(path, 'wb') as f:
+                f.write(b'x')
+        class R: pass
+        r = R()
+        r.stdout = ''
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: False)
+
+    res = vh.download_video('http://x', out_dir)
+    assert res is not None
+    assert os.path.exists(res)
+    assert res == created_paths[-1]
+
+def test_download_video_retries_selector_without_subtitles_on_subtitle_error(tmp_env, monkeypatch, tmp_path):
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+    out_dir = str(tmp_path / 'out')
+    os.makedirs(out_dir, exist_ok=True)
+
+    monkeypatch.setattr(vh, 'get_video_info', lambda url: {'id': 'XYZ'})
+    monkeypatch.setattr(vh, 'resolve_ytdlp_cmd', lambda: ['yt-dlp'])
+
+    calls = []
+
+    def fake_safe(cmd, **kwargs):
+        calls.append(cmd)
+        class R: pass
+        if '--write-subs' in cmd:
+            raise subprocess.CalledProcessError(
+                1, cmd, output='', stderr="ERROR: Unable to download video subtitles for 'ab': HTTP Error 429: Too Many Requests"
+            )
+        path = os.path.join(out_dir, 'Any Title [XYZ].mp4')
+        with open(path, 'wb') as f:
+            f.write(b'x')
+        r = R()
+        r.stdout = ''
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: True)
+
+    res = vh.download_video('http://x', out_dir, format_selectors=[vh.FORMAT_SELECTORS[0]])
+    assert res is not None
+    assert os.path.exists(res)
+    assert len(calls) == 2
+    assert '--write-subs' in calls[0]
+    assert '--write-subs' not in calls[1]
 
 
 def test_compress_video_with_successful_ffmpeg_calls(tmp_env, monkeypatch, tmp_path):
@@ -201,7 +377,7 @@ def test_process_video_archives_and_updates_index(tmp_env, monkeypatch, tmp_path
     monkeypatch.setattr(vh, 'get_video_info', fake_info)
 
     # stub download_video to create a file in provided output dir
-    def fake_download(u, out_dir):
+    def fake_download(u, out_dir, **kwargs):
         os.makedirs(out_dir, exist_ok=True)
         p = os.path.join(out_dir, 'T [VID123].mp4')
         with open(p, 'wb') as f: f.write(b'x')
@@ -230,7 +406,7 @@ def test_process_video_oversize_raises_FileTooLargeError(tmp_env, monkeypatch, t
         return {'id': 'BIGID', 'title': 'Big', 'description': '', 'extractor_key': 'Generic', 'webpage_url': u}
     monkeypatch.setattr(vh, 'get_video_info', fake_info)
 
-    def fake_download(u, out_dir):
+    def fake_download(u, out_dir, **kwargs):
         os.makedirs(out_dir, exist_ok=True)
         p = os.path.join(out_dir, 'Big [BIGID].mp4')
         with open(p, 'wb') as f: f.write(b'x')

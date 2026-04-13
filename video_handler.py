@@ -7,6 +7,7 @@ import shutil
 import sys
 import logging
 import time
+from shutil import which
 from config import ARCHIVE_ROOT, MAX_SIZE_MB, UPLOAD_LIMIT_MB
 
 class FileTooLargeError(Exception):
@@ -45,23 +46,56 @@ class DownloadError(VideoHandlerError):
     pass
 
 # Configuration
-YT_DLP_CMD = os.path.join(sys.prefix, 'Scripts', 'yt-dlp.exe')
+YT_DLP_CMD = None
 FFMPEG_CMD = 'ffmpeg'
+AUDIO_BITRATE_KBPS = 192
 
 logger = logging.getLogger("AlYankoVid.VideoHandler")
+
+# Ordered fallback strategy for yt-dlp format selection.
+# Start with explicit audio+video pairings to avoid silent outputs.
+FORMAT_SELECTORS = [
+    'bestvideo+bestaudio',
+    'best[acodec!=none]',
+    'bestvideo*+bestaudio*',
+    'bestvideo*+bestaudio*/best*[acodec!=none]/best',
+]
+
+def resolve_ytdlp_cmd():
+    """Find a runnable yt-dlp command across local venvs, PATH, or module execution."""
+    global YT_DLP_CMD
+    candidates = [
+        [os.path.join(sys.prefix, 'Scripts', 'yt-dlp.exe')],
+        [os.path.join(sys.prefix, 'bin', 'yt-dlp')],
+        ['yt-dlp'],
+        [sys.executable, '-m', 'yt_dlp'],
+    ]
+
+    for candidate in candidates:
+        executable = candidate[0]
+        if os.path.sep in executable and not os.path.exists(executable):
+            continue
+        if executable == 'yt-dlp' and which('yt-dlp') is None:
+            continue
+        try:
+            safe_subprocess_run(candidate + ['--version'], capture_output=True, check=True, encoding='utf-8')
+            YT_DLP_CMD = candidate
+            return candidate
+        except Exception:
+            continue
+
+    YT_DLP_CMD = None
+    raise RuntimeError("Missing required dependency: yt-dlp")
 
 def check_dependencies():
     """Checks if required tools are installed."""
     missing = []
     
     # Check yt-dlp
-    if not os.path.exists(YT_DLP_CMD):
-        # Try just 'yt-dlp' if the venv path fails
-        try:
-            safe_subprocess_run(['yt-dlp', '--version'], capture_output=True, check=True, encoding='utf-8')
-            globals()['YT_DLP_CMD'] = 'yt-dlp'
-        except:
-            missing.append("yt-dlp")
+    try:
+        resolve_ytdlp_cmd()
+    except Exception:
+        missing.append("yt-dlp")
             
     # Check ffmpeg
     try:
@@ -80,7 +114,7 @@ def clean_filename(title):
 def get_video_info(url):
     """Retrieves video metadata using yt-dlp."""
     try:
-        command = [YT_DLP_CMD, '-J', url]
+        command = resolve_ytdlp_cmd() + ['-J', url]
         result = safe_subprocess_run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
@@ -93,41 +127,97 @@ def get_video_info(url):
             logger.error(f"Error getting video info: {stderr}")
             raise DownloadError(f"Something went wrong while I was scoping out the video: {stderr.split(':')[-1].strip()}")
 
-def download_video(url, output_dir):
-    """Downloads video using yt-dlp."""
+def _remove_new_files(output_dir, baseline_files):
+    """Delete files created after an attempt, used to clean up silent candidates."""
+    for name in os.listdir(output_dir):
+        if name not in baseline_files:
+            try:
+                os.remove(os.path.join(output_dir, name))
+            except Exception:
+                pass
+
+def _find_downloaded_video_path(output_dir, video_id):
+    """Find downloaded mp4 by video ID in filename."""
+    for file in os.listdir(output_dir):
+        if video_id in file and file.endswith('.mp4'):
+            return os.path.join(output_dir, file)
+    return None
+
+def _subtitle_flags():
+    return ['--write-subs', '--write-auto-subs', '--sub-langs', 'en,.*']
+
+def download_video_with_format(url, output_dir, format_selector, video_id):
+    """Run one yt-dlp attempt with a specific format selector."""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
-    # Template: Title [id].ext
+
     output_template = os.path.join(output_dir, '%(title)s [%(id)s].%(ext)s')
-    
+    command = resolve_ytdlp_cmd() + [
+        '-f', format_selector,
+        '-o', output_template,
+        '--merge-output-format', 'mp4',
+        *_subtitle_flags(),
+        url
+    ]
+
     try:
-        # Download format: best video+audio that is mp4 compatible or anything else we can merge
-        # + Subtitles (English preferred, but any will do)
-        command = [
-            YT_DLP_CMD, 
-            '-f', 'bestvideo*+bestaudio*/best*[acodec!=none]/best',
-            '-o', output_template, 
+        result = safe_subprocess_run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        logger.info(f"yt-dlp output for selector `{format_selector}`:\n{result.stdout}")
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr or ""
+        subtitle_failure = "Unable to download video subtitles" in stderr
+        if not subtitle_failure:
+            raise
+        logger.warning(
+            f"Subtitle fetch failed for selector `{format_selector}`; retrying this selector without subtitle flags."
+        )
+        command_without_subs = resolve_ytdlp_cmd() + [
+            '-f', format_selector,
+            '-o', output_template,
             '--merge-output-format', 'mp4',
-            '--write-subs', '--write-auto-subs', '--sub-langs', 'en,.*',
             url
         ]
-        # Capture and log output for deep debugging
-        result = safe_subprocess_run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-        logger.info(f"yt-dlp output:\n{result.stdout}")
-        
-        # Find the downloaded file
-        info = get_video_info(url)
-        if info:
-            video_id = info.get('id')
-            # Simple search for the file with the ID in the name in the output dir
-            video_path = None
-            for file in os.listdir(output_dir):
-                if video_id in file and file.endswith('.mp4'):
-                    video_path = os.path.join(output_dir, file)
-                    break
-            return video_path
-        return None
+        result = safe_subprocess_run(
+            command_without_subs,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding='utf-8'
+        )
+        logger.info(
+            f"yt-dlp output for selector `{format_selector}` (subtitle fallback disabled):\n{result.stdout}"
+        )
+    return _find_downloaded_video_path(output_dir, video_id)
+
+def download_video(url, output_dir, video_id=None, format_selectors=None):
+    """Downloads video using yt-dlp with audio-first format retries."""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    try:
+        selectors = format_selectors or FORMAT_SELECTORS
+        if not video_id:
+            info = get_video_info(url)
+            video_id = info.get('id') if info else None
+        if not video_id:
+            return None
+
+        last_path = None
+        for idx, format_selector in enumerate(selectors):
+            baseline_files = set(os.listdir(output_dir))
+            video_path = download_video_with_format(url, output_dir, format_selector, video_id)
+            if not video_path:
+                _remove_new_files(output_dir, baseline_files)
+                continue
+            last_path = video_path
+            if has_audio_stream(video_path):
+                logger.info(f"Selected format `{format_selector}` with audio stream present.")
+                return video_path
+            logger.warning(f"Downloaded silent media with selector `{format_selector}`. Trying next fallback.")
+            if idx < len(selectors) - 1:
+                _remove_new_files(output_dir, baseline_files)
+
+        return last_path
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
         logger.error(f"Error downloading video: {stderr}")
@@ -249,7 +339,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
             if file_size < target_size_mb:
                  target_total_bitrate = min(target_total_bitrate, original_bitrate)
 
-            audio_bitrate = 128 * 1024
+            audio_bitrate = AUDIO_BITRATE_KBPS * 1024
             video_bitrate = max(target_total_bitrate - audio_bitrate, 100 * 1024) # Min 100k
             
             # Pass 1
@@ -284,7 +374,7 @@ def compress_video(input_path, target_size_mb, force_normalize=True):
                 '-pass', '2',
                 '-passlogfile', pass_log_prefix,
                 '-c:a', 'aac',
-                '-b:a', '128k',
+                '-b:a', f'{AUDIO_BITRATE_KBPS}k',
                 '-ac', '2',
                 '-ar', '48000',
                 '-movflags', '+faststart',
@@ -345,6 +435,7 @@ def update_ytdlp():
     logger.info("Attempting to update yt-dlp...")
     try:
         safe_subprocess_run([sys.executable, '-m', 'pip', 'install', '-U', 'yt-dlp'], check=True, capture_output=True, encoding='utf-8')
+        resolve_ytdlp_cmd()
         logger.info("yt-dlp updated successfully.")
         return True
     except Exception as e:
@@ -383,7 +474,7 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
             title = info.get("title", "")
             description = info.get("description", "")
 
-            downloaded_path = download_video(url, temp_dir)
+            downloaded_path = download_video(url, temp_dir, video_id=info.get('id'))
         except DownloadError as e:
             if retry:
                 logger.warning(f"Failed: {e}. Attempting yt-dlp update and retry...")
