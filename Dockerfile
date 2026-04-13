@@ -2,17 +2,34 @@ FROM python:3.10-slim
 
 # Install system dependencies
 # ffmpeg: Video processing
-# openjdk-21-jre-headless: Java Runtime for signal-cli (Java 21+)
 # curl, wget, tar: Downloading utilities
 # libmagic1: Often needed for python-magic (if used later)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    openjdk-21-jre-headless \
+    ca-certificates \
     curl \
     wget \
     tar \
     procps \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Java runtime required by current signal-cli releases.
+# Use Adoptium JRE to avoid distro-package lag and keep multi-arch builds deterministic.
+ARG TARGETARCH
+ARG JAVA_VERSION=25
+ENV JAVA_HOME=/opt/java
+ENV PATH=$PATH:$JAVA_HOME/bin
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) JAVA_ARCH="x64" ;; \
+      arm64) JAVA_ARCH="aarch64" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://api.adoptium.net/v3/binary/latest/${JAVA_VERSION}/ga/linux/${JAVA_ARCH}/jre/hotspot/normal/eclipse?project=jdk" -o /tmp/jre.tar.gz; \
+    mkdir -p "${JAVA_HOME}"; \
+    tar -xzf /tmp/jre.tar.gz --strip-components=1 -C "${JAVA_HOME}"; \
+    rm /tmp/jre.tar.gz; \
+    java -version
 
 # Set up Signal-CLI environment
 ARG SIGNAL_CLI_VERSION=latest

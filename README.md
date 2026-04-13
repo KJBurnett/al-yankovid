@@ -11,7 +11,7 @@ A whacky Signal bot that listens for `Yank {url}` commands or `@mentions`, downl
 - **Resilient**: Auto-restarts if the Signal daemon crashes.
 
 ## Prerequisites
-- **Java 21+**: Required for `signal-cli`.
+- **Java 25+**: Required for current `signal-cli` releases (e.g., `v0.14.2`).
 - **FFmpeg**: Required for video optimization.
 - **Python 3.10+**: For the bot logic.
 
@@ -59,6 +59,7 @@ Al requires a separate Signal number. **Do not use your own number.**
 
 ### Docker signal-cli behavior
 - The Docker image resolves `SIGNAL_CLI_VERSION=latest` at build time by default.
+- The Docker image installs **Temurin JRE 25** by default to satisfy current `signal-cli` requirements.
 - You can pin a specific version when building:
   ```bash
   docker build --build-arg SIGNAL_CLI_VERSION=0.13.26 -t al-yankovid:custom .
@@ -148,7 +149,7 @@ docker run -d --name al-yankovid --restart unless-stopped \
   -e BOT_NUMBER='+16014365901' \
   -e SIGNAL_CLI_CONFIG_DIR=/app/data \
   -e SIGNAL_CLI_PATH=/opt/signal-cli/bin/signal-cli \
-  -e JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
+  -e JAVA_HOME=/opt/java \
   -e PUID=0 -e PGID=0 -e TZ='America/Los_Angeles' \
   -v /mnt/user/appdata/al-yankovid/data:/app/data:rw \
   -v /mnt/user/drivepool/Containers/al-yankovid/archive:/app/archive:rw \
