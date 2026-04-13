@@ -20,9 +20,34 @@ def _build_signal_env():
         logger.warning(f"Ignoring invalid JAVA_HOME path: {java_home}")
     return env
 
+def _get_signal_cli_version(env):
+    try:
+        result = subprocess.run(
+            [SIGNAL_CLI_PATH, '--version'],
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding='utf-8',
+            errors='replace',
+            env=env,
+            timeout=10
+        )
+        output = (result.stdout or "").strip()
+        if not output:
+            output = (result.stderr or "").strip()
+        if not output:
+            return None
+        return output.splitlines()[0].strip()
+    except Exception as e:
+        logger.warning(f"Could not determine signal-cli version: {e}")
+        return None
+
 def run_signal_daemon():
     """Runs signal-cli in json-rpc mode."""
     env = _build_signal_env()
+    signal_version = _get_signal_cli_version(env)
+    if signal_version:
+        logger.info(f"Using signal-cli version: {signal_version}")
 
     # Determine config directory for signal-cli. Prefer SIGNAL_CLI_CONFIG_DIR env var.
     config_dir = env.get('SIGNAL_CLI_CONFIG_DIR', '/app/data')
