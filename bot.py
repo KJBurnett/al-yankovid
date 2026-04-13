@@ -277,8 +277,40 @@ def process_incoming_message(line, process):
     except Exception as e:
         logger.error(f"Error processing line: {e}")
 
-def monitor_stderr(process):
+FATAL_SIGNAL_ERRORS = [
+    "is not registered",
+    "Invalid account",
+]
+
+SIGNAL_CLI_COMPAT_ERRORS = [
+    "Unsupported protocol",
+    "Unknown version",
+    "NoSuchMethodError",
+    "NoSuchFieldError",
+    "IncompatibleClassChangeError",
+    "Error while parsing incoming websocket message",
+    "HTTP 426",
+]
+
+def _classify_signal_error(clean_line):
+    lower_line = clean_line.lower()
+    is_account_fatal = any(err.lower() in lower_line for err in FATAL_SIGNAL_ERRORS)
+    is_compat_issue = any(err.lower() in lower_line for err in SIGNAL_CLI_COMPAT_ERRORS)
+    return is_account_fatal, is_compat_issue
+
+def _log_signal_cli_update_guidance():
+    logger.error("Likely signal-cli compatibility failure detected.")
+    logger.error("Refresh the container image to update signal-cli, then recreate the container.")
+    logger.error("Suggested commands:")
+    logger.error("  docker compose pull")
+    logger.error("  docker compose up -d --force-recreate")
+    logger.error("If you build locally instead of pulling:")
+    logger.error("  docker compose build --no-cache")
+    logger.error("  docker compose up -d --force-recreate")
+
+def monitor_stderr(process, daemon_shutdown):
     """Monitor stderr in a separate thread."""
+    update_guidance_logged = False
     for line in process.stderr:
         if shutdown_event.is_set():
             break
@@ -289,6 +321,15 @@ def monitor_stderr(process):
                 logger.info(f"Signal-cli: {clean_line}")
             else:
                 logger.warning(f"Signal-cli Stderr: {clean_line}")
+                is_account_fatal, is_compat_issue = _classify_signal_error(clean_line)
+                if is_compat_issue and not update_guidance_logged:
+                    _log_signal_cli_update_guidance()
+                    update_guidance_logged = True
+                if is_account_fatal or is_compat_issue:
+                    logger.error(f"Fatal signal-cli error — shutting down to prevent restart loop: {clean_line}")
+                    daemon_shutdown.set()
+                    shutdown_event.set()
+                    break
 
 def main():
     while not shutdown_event.is_set():
@@ -316,7 +357,7 @@ def main():
                 process_incoming_message(line, proc)
 
         t_stdout = threading.Thread(target=monitor_wrapper, args=(process, daemon_shutdown), daemon=True)
-        t_stderr = threading.Thread(target=monitor_stderr, args=(process,), daemon=True)
+        t_stderr = threading.Thread(target=monitor_stderr, args=(process, daemon_shutdown), daemon=True)
         t_stdout.start()
         t_stderr.start()
 

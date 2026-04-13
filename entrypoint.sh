@@ -27,6 +27,13 @@ else
     echo "Signal configuration found in $SIGNAL_CONFIG"
 fi
 
+if command -v signal-cli >/dev/null 2>&1; then
+    SIGNAL_CLI_RUNTIME_VERSION="$(signal-cli --version 2>/dev/null | head -n 1 || true)"
+    if [ -n "$SIGNAL_CLI_RUNTIME_VERSION" ]; then
+        echo "Using $SIGNAL_CLI_RUNTIME_VERSION"
+    fi
+fi
+
 # Ensure directories exist
 mkdir -p /app/logs /app/data /app/archive
 
