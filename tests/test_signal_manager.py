@@ -101,3 +101,75 @@ def test_get_signal_cli_version_returns_none_on_error(monkeypatch):
     monkeypatch.setattr(signal_manager.subprocess, 'run', fake_run)
     version = signal_manager._get_signal_cli_version({})
     assert version is None
+
+
+def test_select_signal_config_dir_prefers_store_with_uuid_match(tmp_env, tmp_path):
+    signal_manager = importlib.import_module('signal_manager')
+    importlib.reload(signal_manager)
+
+    base = tmp_path / "data"
+    nested = base / "signal-cli"
+    (base / "data").mkdir(parents=True, exist_ok=True)
+    (nested / "data").mkdir(parents=True, exist_ok=True)
+
+    (base / "data" / "accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"number": "+16014365901", "uuid": "abc-uuid", "path": "1", "environment": "LIVE"}
+                ],
+                "version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (nested / "data" / "accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"number": "+16014365901", "uuid": None, "path": "2", "environment": "LIVE"}
+                ],
+                "version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    selected = signal_manager._select_signal_config_dir(str(base), "+16014365901")
+    assert selected == str(base)
+
+
+def test_select_signal_config_dir_uses_nested_when_base_has_no_match(tmp_env, tmp_path):
+    signal_manager = importlib.import_module('signal_manager')
+    importlib.reload(signal_manager)
+
+    base = tmp_path / "data"
+    nested = base / "signal-cli"
+    (base / "data").mkdir(parents=True, exist_ok=True)
+    (nested / "data").mkdir(parents=True, exist_ok=True)
+
+    (base / "data" / "accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"number": "+19999999999", "uuid": "old", "path": "9", "environment": "LIVE"}
+                ],
+                "version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (nested / "data" / "accounts.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"number": "+16014365901", "uuid": "new", "path": "10", "environment": "LIVE"}
+                ],
+                "version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    selected = signal_manager._select_signal_config_dir(str(base), "+16014365901")
+    assert selected == str(nested)
