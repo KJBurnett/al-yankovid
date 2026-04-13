@@ -7,10 +7,22 @@ from config import JAVA_HOME, SIGNAL_CLI_PATH, BOT_NUMBER
 
 logger = logging.getLogger("AlYankoVid.SignalManager")
 
+def _build_signal_env():
+    env = os.environ.copy()
+    java_home = (JAVA_HOME or "").strip()
+    if not java_home:
+        return env
+    if os.path.isdir(java_home):
+        env['JAVA_HOME'] = java_home
+    else:
+        # Do not force an invalid JAVA_HOME into signal-cli; allow java from PATH.
+        env.pop('JAVA_HOME', None)
+        logger.warning(f"Ignoring invalid JAVA_HOME path: {java_home}")
+    return env
+
 def run_signal_daemon():
     """Runs signal-cli in json-rpc mode."""
-    env = os.environ.copy()
-    env['JAVA_HOME'] = JAVA_HOME
+    env = _build_signal_env()
 
     # Determine config directory for signal-cli. Prefer SIGNAL_CLI_CONFIG_DIR env var.
     config_dir = env.get('SIGNAL_CLI_CONFIG_DIR', '/app/data')
