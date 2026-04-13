@@ -107,6 +107,25 @@ Al YankoVid is published to the GitHub Container Registry (GHCR) and updated aut
 
 Once your container is configured with a GHCR image, updating is one click: **Docker → al-yankovid → Update Container**. No tarballs, no manual steps.
 
+### Signal Registration From unRAID Server
+
+Run registration directly from the unRAID server terminal so container and account state are always in sync:
+
+```bash
+# Check which account data exists
+docker exec -it al-yankovid signal-cli --config /app/data listAccounts
+docker exec -it al-yankovid signal-cli --config /app/data/signal-cli listAccounts
+
+# Register and verify (use the same config path for both)
+docker exec -it al-yankovid signal-cli --config /app/data/signal-cli -u +16014365901 register
+docker exec -it al-yankovid signal-cli --config /app/data/signal-cli -u +16014365901 verify <CODE>
+
+# Restart after successful verify
+docker restart al-yankovid
+```
+
+Startup logs now print candidate config paths and selected path, plus step-by-step recovery commands when an account is not registered.
+
 ---
 
 ## Migration & Deployment Notes (unRAID)

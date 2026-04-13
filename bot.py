@@ -308,9 +308,19 @@ def _log_signal_cli_update_guidance():
     logger.error("  docker compose build --no-cache")
     logger.error("  docker compose up -d --force-recreate")
 
+def _log_signal_registration_guidance():
+    config_dir = signal_manager.get_last_signal_config_dir() or "/app/data"
+    logger.error("Signal account is not registered for configured BOT_NUMBER.")
+    logger.error("Run these steps from the unRAID server terminal:")
+    logger.error(f"  1) docker exec -it al-yankovid signal-cli --config {config_dir} listAccounts")
+    logger.error(f"  2) docker exec -it al-yankovid signal-cli --config {config_dir} -u {BOT_NUMBER} register")
+    logger.error(f"  3) docker exec -it al-yankovid signal-cli --config {config_dir} -u {BOT_NUMBER} verify <CODE>")
+    logger.error("  4) docker restart al-yankovid")
+
 def monitor_stderr(process, daemon_shutdown):
     """Monitor stderr in a separate thread."""
     update_guidance_logged = False
+    registration_guidance_logged = False
     for line in process.stderr:
         if shutdown_event.is_set():
             break
@@ -325,6 +335,9 @@ def monitor_stderr(process, daemon_shutdown):
                 if is_compat_issue and not update_guidance_logged:
                     _log_signal_cli_update_guidance()
                     update_guidance_logged = True
+                if is_account_fatal and not registration_guidance_logged:
+                    _log_signal_registration_guidance()
+                    registration_guidance_logged = True
                 if is_account_fatal or is_compat_issue:
                     logger.error(f"Fatal signal-cli error — shutting down to prevent restart loop: {clean_line}")
                     daemon_shutdown.set()
