@@ -54,11 +54,16 @@ logger = logging.getLogger("AlYankoVid.VideoHandler")
 
 # Ordered fallback strategy for yt-dlp format selection.
 # Start with explicit audio+video pairings to avoid silent outputs.
+# TikTok (and some other platforms) serve combined streams only — no separate
+# video+audio tracks — so selectors that require merging will fail with
+# "Requested format is not available". The plain 'best' selector at the end
+# handles those cases since it accepts any available combined format.
 FORMAT_SELECTORS = [
     'bestvideo+bestaudio',
     'best[acodec!=none]',
     'bestvideo*+bestaudio*',
     'bestvideo*+bestaudio*/best*[acodec!=none]/best',
+    'best',
 ]
 
 def resolve_ytdlp_cmd():
@@ -205,7 +210,17 @@ def download_video(url, output_dir, video_id=None, format_selectors=None):
         last_path = None
         for idx, format_selector in enumerate(selectors):
             baseline_files = set(os.listdir(output_dir))
-            video_path = download_video_with_format(url, output_dir, format_selector, video_id)
+            try:
+                video_path = download_video_with_format(url, output_dir, format_selector, video_id)
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if "Requested format is not available" in stderr:
+                    logger.warning(
+                        f"Format selector `{format_selector}` not available for this URL; trying next fallback."
+                    )
+                    _remove_new_files(output_dir, baseline_files)
+                    continue
+                raise
             if not video_path:
                 _remove_new_files(output_dir, baseline_files)
                 continue

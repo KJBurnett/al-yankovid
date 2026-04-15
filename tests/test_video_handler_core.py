@@ -337,6 +337,54 @@ def test_download_video_retries_selector_without_subtitles_on_subtitle_error(tmp
     assert '--write-subs' not in calls[1]
 
 
+def test_download_video_skips_unavailable_formats_and_falls_back(tmp_env, monkeypatch, tmp_path):
+    """Regression: when early format selectors fail with 'Requested format is not available'
+    (as TikTok does for bestvideo+bestaudio), the loop must continue to the next selector
+    instead of raising immediately.
+    """
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+    out_dir = str(tmp_path / 'out')
+    os.makedirs(out_dir, exist_ok=True)
+
+    monkeypatch.setattr(vh, 'get_video_info', lambda url: {'id': 'TK999'})
+    monkeypatch.setattr(vh, 'resolve_ytdlp_cmd', lambda: ['yt-dlp'])
+
+    selectors_tried = []
+
+    def fake_safe(cmd, **kwargs):
+        if '-f' in cmd:
+            selector = cmd[cmd.index('-f') + 1]
+            selectors_tried.append(selector)
+            # Simulate TikTok: first two selectors unavailable, 'best' succeeds.
+            if selector in ('bestvideo+bestaudio', 'best[acodec!=none]'):
+                raise subprocess.CalledProcessError(
+                    1, cmd, output='',
+                    stderr='ERROR: Requested format is not available. Use --list-formats for a list of available formats'
+                )
+            path = os.path.join(out_dir, 'TikTok Video [TK999].mp4')
+            with open(path, 'wb') as f:
+                f.write(b'x')
+        class R: pass
+        r = R()
+        r.stdout = ''
+        r.stderr = ''
+        r.returncode = 0
+        return r
+
+    monkeypatch.setattr(vh, 'safe_subprocess_run', fake_safe)
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: True)
+
+    res = vh.download_video('https://www.tiktok.com/t/ZP8gUYuFD/', out_dir)
+    assert res is not None, "Expected a file but got None"
+    assert os.path.exists(res), f"Expected file at {res!r} to exist"
+    assert 'TK999' in res, "Expected video ID in filename"
+    # The first two selectors should have been tried and skipped, then a successful one used.
+    assert selectors_tried[0] == 'bestvideo+bestaudio'
+    assert selectors_tried[1] == 'best[acodec!=none]'
+    assert len(selectors_tried) >= 3
+
+
 def test_compress_video_with_successful_ffmpeg_calls(tmp_env, monkeypatch, tmp_path):
     vh = importlib.import_module('video_handler')
     importlib.reload(vh)
