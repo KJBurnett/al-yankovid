@@ -219,3 +219,30 @@ AL_STORAGE_LEADER_QUIPS = [
 
 def get_storage_leader_quip(name):
     return random.choice(AL_STORAGE_LEADER_QUIPS).format(name=name)
+
+AL_BATCH_ACK_QUIPS = [
+    "I see you want to yank {count} videos — hold onto your accordion, here we go!",
+    "Oh boy, {count} videos?! My digital bellows are trembling with excitement!",
+    "Buckle up! You've got {count} videos in the queue — I'm already warming up the polka!",
+    "{count} videos?! It's like Christmas morning at the digital accordion factory!",
+    "A batch of {count}?! I'll need a bigger Hawaiian shirt. Starting the party!",
+    "Well slap my spandex! {count} videos coming right up — the hamsters are pedaling!",
+    "I see {count} URLs and I am NOT afraid. Let's gooo!",
+    "{count} whole videos? My curls are bouncing with anticipation!",
+]
+
+AL_BATCH_COMPLETE_QUIPS = [
+    "Batch yank complete! Here's the final accordion report:",
+    "All done! Your video buffet has been served:",
+    "The digital accordion has played its last note for this batch! Results:",
+    "Mission accomplished! Here's the polka-powered rundown:",
+    "And that's a wrap! Your batch results, fresh from the bellows:",
+    "Every last pixel has been yanked! Here's the scorecard:",
+    "The ferrets have finished! Here are the results:",
+]
+
+def get_batch_ack(count):
+    return random.choice(AL_BATCH_ACK_QUIPS).format(count=count)
+
+def get_batch_complete():
+    return random.choice(AL_BATCH_COMPLETE_QUIPS)

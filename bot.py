@@ -9,6 +9,7 @@ import signal
 import random
 import subprocess
 import queue
+import uuid
 
 import video_handler
 import signal_manager
@@ -47,6 +48,10 @@ shutdown_event = threading.Event()
 # Request Queue for Sequential Processing
 request_queue = queue.Queue()
 
+# Batch State Tracking: {batch_id: {total, results, group_id, user_id, source_number}}
+batch_state = {}
+batch_state_lock = threading.Lock()
+
 # --- Exception Handling Hooks ---
 def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -78,10 +83,10 @@ def worker_thread(process):
         try:
             # Get request from queue with a timeout to check shutdown flag
             item = request_queue.get(timeout=1.0)
-            url, group_id, user_id, source_number = item
-            
+            url, group_id, user_id, source_number, batch_id = item
+
             logger.info(f"Worker picked up job: {url} for {user_id}")
-            handle_video_request(url, group_id, user_id, source_number, process)
+            handle_video_request(url, group_id, user_id, source_number, process, batch_id=batch_id)
             
             request_queue.task_done()
         except queue.Empty:
@@ -89,21 +94,36 @@ def worker_thread(process):
         except Exception as e:
             logger.error(f"Worker thread error: {e}", exc_info=True)
 
-def handle_video_request(url, group_id, user_id, source_number, process):
+def _record_batch_result(batch_id, url, success, process):
+    """Record the result of one URL in a batch and send the summary if all are done."""
+    with batch_state_lock:
+        state = batch_state.get(batch_id)
+        if state is None:
+            return
+        state['results'].append((url, success))
+        if len(state['results']) < state['total']:
+            return
+        # All URLs in the batch are done — build and send the summary
+        results = state['results']
+        group_id = state['group_id']
+        user_id = state['user_id']
+        del batch_state[batch_id]
+
+    header = personality.get_batch_complete()
+    lines = [f"{'✅' if ok else '❌'} {u}" for u, ok in results]
+    msg = header + "\n" + "\n".join(lines)
+    logger.info(f"Batch {batch_id} complete, sending summary.")
+    signal_manager.send_message(process, group_id, user_id, msg)
+
+def handle_video_request(url, group_id, user_id, source_number, process, batch_id=None):
     """Handles a single video archival request."""
-    # Note: user_id should be the UUID for internal/filesystem use, 
-    # but we use it for messaging too if it's the only identifier.
-    
-    # The original `envelope` and `data_message` are now processed in `process_incoming_message`
-    # and `group_id` and `user_id` are passed directly.
-    
     logger.info(f"Processing request for {url} from {user_id}")
-    
+    success = False
+
     # 1. Acknowledge with a whacky ACK quip
     signal_manager.send_message(process, group_id, user_id, personality.get_ack())
-    
-    # 2. Process
 
+    # 2. Process
     try:
         # Define callback for heavy compression notification
         def notify_heavy_compression():
@@ -120,12 +140,12 @@ def handle_video_request(url, group_id, user_id, source_number, process):
         video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression, retry_callback=notify_retry)
         # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service, has_audio
         video_path, title, description, metadata_path, sub_path, service, has_audio = video_data
-        
+
         if video_path and os.path.exists(video_path):
             # Construct formatted message
             quip = personality.get_quip()
             msg_parts = [quip]
-            
+
             if service == 'TikTok':
                 # TikTok only has a caption, so we use one clean header
                 caption = title if title else description
@@ -140,21 +160,21 @@ def handle_video_request(url, group_id, user_id, source_number, process):
 
             if not has_audio:
                 msg_parts.append("Accordion autopsy: this version of the video came through without an audio stream, so it'll play silent.")
-            
+
             final_message = "\n\n".join(msg_parts)
-            
+
             logger.info(f"Successfully processed {url}, sending structured message.")
             signal_manager.send_message(process, group_id, user_id, final_message, [video_path])
-            
+
             # 3. Log Stats
-            stats_manager.log_archive(user_id, source_number, url, video_path, 
+            stats_manager.log_archive(user_id, source_number, url, video_path,
                                      metadata_path=metadata_path, subtitle_path=sub_path)
-            
+            success = True
         else:
             logger.warning(f"Failed to process {url}")
             signal_manager.send_message(process, group_id, user_id, personality.get_error())
             stats_manager.log_failure(user_id, source_number, url, "Unknown failure (no video path)")
-            
+
     except video_handler.FileTooLargeError as e:
         logger.error(str(e))
         signal_manager.send_message(process, group_id, user_id, "This video is too massive for Signal! It's bigger than my Accordion collection!")
@@ -171,6 +191,9 @@ def handle_video_request(url, group_id, user_id, source_number, process):
         logger.error(f"Error processing video: {e}", exc_info=True)
         signal_manager.send_message(process, group_id, user_id, f"Error occurred: {str(e)}")
         stats_manager.log_failure(user_id, source_number, url, str(e))
+    finally:
+        if batch_id is not None:
+            _record_batch_result(batch_id, url, success, process)
 
 def process_incoming_message(line, process):
     try:
@@ -217,9 +240,6 @@ def process_incoming_message(line, process):
                         logger.info(f"Unmatched mentions (check BOT_UUID config): mentions={mentions} bodyRanges={body_ranges}")
                     
                     # 2. Check for "Yank {url}" OR (mentioned AND contains URL)
-                    url_match = re.search(r'(https?://\S+)', message_text)
-                    yank_match = re.search(r'(?:Yank|Yoink)\s+(https?://\S+)', message_text, re.IGNORECASE)
-                    
                     delete_match = re.search(r'(?:Al\s+delete|delete)\s+(https?://\S+)', message_text, re.IGNORECASE)
                     if delete_match:
                         url = delete_match.group(1)
@@ -228,15 +248,31 @@ def process_incoming_message(line, process):
                         signal_manager.send_message(process, group_id, user_id, f"Consider it gone! I've scrubbed that video from my digital accordion. 🪗🧹")
                         return
 
-                    if yank_match:
-                        url = yank_match.group(1)
-                        logger.info(f"Queuing video request: {url}")
-                        request_queue.put((url, group_id, user_id, source_number))
-                        return
-                    elif is_mentioned and url_match:
-                        url = url_match.group(1)
-                        logger.info(f"Queuing video request: {url}")
-                        request_queue.put((url, group_id, user_id, source_number))
+                    # Extract all URLs robustly: split on any whitespace/comma combo,
+                    # strip trailing punctuation, keep tokens that start with http(s)://
+                    tokens = re.split(r'[\s,]+', message_text)
+                    urls = [t.strip('.,;') for t in tokens if re.match(r'https?://', t)]
+                    is_yank = bool(re.search(r'\b(?:Yank|Yoink)\b', message_text, re.IGNORECASE))
+
+                    if (is_yank or is_mentioned) and urls:
+                        if len(urls) == 1:
+                            logger.info(f"Queuing video request: {urls[0]}")
+                            request_queue.put((urls[0], group_id, user_id, source_number, None))
+                        else:
+                            batch_id = str(uuid.uuid4())
+                            with batch_state_lock:
+                                batch_state[batch_id] = {
+                                    'total': len(urls),
+                                    'results': [],
+                                    'group_id': group_id,
+                                    'user_id': user_id,
+                                    'source_number': source_number,
+                                }
+                            logger.info(f"Queuing batch of {len(urls)} URLs, batch_id={batch_id}")
+                            signal_manager.send_message(process, group_id, user_id, personality.get_batch_ack(len(urls)))
+                            for url in urls:
+                                logger.info(f"  Queuing batch URL: {url}")
+                                request_queue.put((url, group_id, user_id, source_number, batch_id))
                         return
 
                     # 3. Check for "stats" command
