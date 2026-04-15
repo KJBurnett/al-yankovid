@@ -53,6 +53,59 @@ def test_instagram_reel_get_video_info_returns_metadata():
     ), f"Unexpected extractor_key: {info.get('extractor_key')}"
 
 
+# TikTok video that was reported as failing with "Requested format is not available".
+# Short URL redirects to the full TikTok video page.
+TIKTOK_VIDEO_URL = os.getenv(
+    "TIKTOK_TEST_URL",
+    "https://www.tiktok.com/t/ZP8gUYuFD/",
+)
+
+
+@pytest.mark.skipif(not _network_tests_enabled(), reason="Set RUN_NETWORK_TESTS=1 to enable network integration tests")
+def test_tiktok_get_video_info_returns_metadata():
+    """Verify yt-dlp can extract metadata from a TikTok video without error."""
+    vh = importlib.import_module("video_handler")
+    importlib.reload(vh)
+
+    info = vh.get_video_info(TIKTOK_VIDEO_URL)
+
+    assert info, "get_video_info returned empty/None for TikTok video"
+    assert info.get("id"), "Expected a non-empty video ID in metadata"
+    assert info.get("extractor_key", "").lower() in (
+        "tiktok",
+    ), f"Unexpected extractor_key: {info.get('extractor_key')}"
+
+
+@pytest.mark.skipif(not _network_tests_enabled(), reason="Set RUN_NETWORK_TESTS=1 to enable network integration tests")
+def test_tiktok_download_has_audio():
+    """Regression test: TikTok video must download successfully with an audio stream.
+
+    TikTok serves combined (muxed) streams rather than separate video+audio tracks,
+    so format selectors that require merging (e.g. bestvideo+bestaudio) fail with
+    "Requested format is not available". This test verifies that the format-selector
+    fallback chain reaches 'best' and produces a playable file with audio.
+    """
+    vh = importlib.import_module("video_handler")
+    importlib.reload(vh)
+
+    temp_dir = tempfile.mkdtemp(prefix="integration_tiktok_")
+    try:
+        info = vh.get_video_info(TIKTOK_VIDEO_URL)
+        assert info and info.get("id"), "Could not fetch TikTok video metadata"
+
+        path = vh.download_video(TIKTOK_VIDEO_URL, temp_dir, video_id=info.get("id"))
+
+        assert path is not None, "download_video returned None — no file was produced"
+        assert os.path.exists(path), f"Expected downloaded file at {path!r} but it does not exist"
+        assert path.endswith(".mp4"), f"Expected an MP4 file, got: {path!r}"
+        assert vh.has_audio_stream(path) is True, (
+            f"Downloaded TikTok video has no audio stream — the video would be muted when sent. "
+            f"File: {path!r}"
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 @pytest.mark.skipif(not _network_tests_enabled(), reason="Set RUN_NETWORK_TESTS=1 to enable network integration tests")
 def test_instagram_reel_download_has_audio():
     """Regression test: Instagram reel must download with an audio stream (not muted).
