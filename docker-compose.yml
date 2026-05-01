@@ -16,6 +16,11 @@ services:
       - BOT_NUMBER=${BOT_NUMBER}
       - SIGNAL_CLI_CONFIG_DIR=/app/data
       - TZ=America/Los_Angeles  # Set your timezone
+      - ROCKETCHAT_ENABLED=${ROCKETCHAT_ENABLED:-false}
+      - ROCKETCHAT_URL=${ROCKETCHAT_URL:-}
+      - ROCKETCHAT_USERNAME=${ROCKETCHAT_USERNAME:-}
+      - ROCKETCHAT_PASSWORD=${ROCKETCHAT_PASSWORD:-}
+      - ROCKETCHAT_BOT_USERNAME=${ROCKETCHAT_BOT_USERNAME:-al-yankovid}
     deploy:
       resources:
         limits:

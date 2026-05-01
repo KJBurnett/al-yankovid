@@ -15,6 +15,11 @@ services:
       - TZ=${TZ:-UTC}
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      - ROCKETCHAT_ENABLED=${ROCKETCHAT_ENABLED:-false}
+      - ROCKETCHAT_URL=${ROCKETCHAT_URL:-}
+      - ROCKETCHAT_USERNAME=${ROCKETCHAT_USERNAME:-}
+      - ROCKETCHAT_PASSWORD=${ROCKETCHAT_PASSWORD:-}
+      - ROCKETCHAT_BOT_USERNAME=${ROCKETCHAT_BOT_USERNAME:-al-yankovid}
     volumes:
       # Persistent Signal config/data (must contain signal-cli config if already registered)
       - /mnt/user/appdata/al-yankovid/data:/app/data
