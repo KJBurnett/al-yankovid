@@ -243,13 +243,13 @@ def download_video(url, output_dir, video_id=None, format_selectors=None):
         logger.error(f"Unexpected error during download: {e}")
         raise DownloadError(f"Even I don't know what happened there! *Accordion screech*")
 
-def archive_metadata(archive_dir, info):
+def archive_metadata(archive_dir, info, request_service=None):
     """Saves relevant metadata to a JSON file in the archive."""
     title = info.get("title", "")
     description = info.get("description", "")
     service = info.get("extractor_key", "Generic")
-    
-    # TikTok Fix: yt-dlp truncates 'title' and 'fulltitle' for TikToks. 
+
+    # TikTok Fix: yt-dlp truncates 'title' and 'fulltitle' for TikToks.
     # The 'description' usually contains the full caption.
     if service == 'TikTok' and title.endswith('...'):
         title = description if description else title
@@ -258,7 +258,8 @@ def archive_metadata(archive_dir, info):
         "title": title,
         "description": description,
         "uploader": info.get("uploader", ""),
-        "service": service,
+        "service": service,  # extractor/platform (YouTube, TikTok, …)
+        "request_service": request_service,  # bot front-end (signal/rocketchat) or None for legacy
         "timestamp": info.get("timestamp") or datetime.datetime.now().isoformat(),
         "original_url": info.get("original_url", info.get("webpage_url", ""))
     }
@@ -457,8 +458,11 @@ def update_ytdlp():
         logger.error(f"Failed to update yt-dlp: {e}")
         return False
 
-def process_video(url, user_id="Unknown", retry=True, progress_callback=None, retry_callback=None):
+def process_video(url, user_id="Unknown", retry=True, progress_callback=None, retry_callback=None,
+                  upload_limit_mb=None, service=None):
     """Main workflow for a video URL."""
+    limit = upload_limit_mb if upload_limit_mb is not None else UPLOAD_LIMIT_MB
+
     # 1. Check Archive
     archived_path = check_archive(url)
     if archived_path and os.path.exists(archived_path):
@@ -466,18 +470,18 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
         # Try to find metadata.json and subtitles in the same directory
         archive_dir = os.path.dirname(archived_path)
         metadata_path = os.path.join(archive_dir, "metadata.json")
-        title, description, service = "", "", "Generic"
+        title, description, extractor_service = "", "", "Generic"
         if os.path.exists(metadata_path):
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                     title = meta.get("title", "")
                     description = meta.get("description", "")
-                    service = meta.get("service", "Generic")
+                    extractor_service = meta.get("service", "Generic")
             except: pass
-            
+
         sub_path = find_subtitle_file(archive_dir, os.path.basename(archived_path))
-        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path, service, has_audio_stream(archived_path)
+        return archived_path, title, description, (metadata_path if os.path.exists(metadata_path) else None), sub_path, extractor_service, has_audio_stream(archived_path)
 
     # Unique temp dir for concurrency
     import uuid
@@ -497,7 +501,9 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
                     retry_callback()
                 update_ytdlp()
                 time.sleep(2)
-                return process_video(url, user_id=user_id, retry=False, progress_callback=progress_callback, retry_callback=retry_callback)
+                return process_video(url, user_id=user_id, retry=False,
+                                     progress_callback=progress_callback, retry_callback=retry_callback,
+                                     upload_limit_mb=upload_limit_mb, service=service)
             else:
                 raise
 
@@ -509,24 +515,26 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
 
         # 4.5. Oversized File Guard
         final_size = get_file_size_mb(final_path)
-        if final_size > UPLOAD_LIMIT_MB:
+        if final_size > limit:
             if progress_callback:
                 progress_callback()
             logger.info(f"Attempting aggressive compression for {final_size:.2f}MB video...")
             aggressive_path = compress_video(final_path, MAX_SIZE_MB * 0.85, force_normalize=True)
             final_path = aggressive_path
             final_size = get_file_size_mb(final_path)
-            if final_size > UPLOAD_LIMIT_MB:
-                 raise FileTooLargeError(f"Video still too large ({final_size:.2f}MB) after aggressive compression.")
+            if final_size > limit:
+                raise FileTooLargeError(f"Video still too large ({final_size:.2f}MB) after aggressive compression.")
 
         # 5. Archive
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         archive_dir = os.path.join(ARCHIVE_ROOT, str(user_id), timestamp)
         os.makedirs(archive_dir, exist_ok=True)
-        
+
         # Save Metadata
-        metadata_path, title, description, service = archive_metadata(archive_dir, info)
-        
+        metadata_path, title, description, extractor_service = archive_metadata(
+            archive_dir, info, request_service=service
+        )
+
         filename = os.path.basename(final_path)
         archived_file_path = os.path.join(archive_dir, filename)
         shutil.move(final_path, archived_file_path)
@@ -542,13 +550,13 @@ def process_video(url, user_id="Unknown", retry=True, progress_callback=None, re
             archived_sub_path = os.path.join(archive_dir, new_sub_name)
             shutil.move(selected_sub, archived_sub_path)
             logger.info(f"Archived subtitle: {archived_sub_path}")
-        
+
         # Update index
         index = load_archive_index()
         index[url] = archived_file_path
         save_archive_index(index)
-        
-        return archived_file_path, title, description, metadata_path, archived_sub_path, service, has_audio_stream(archived_file_path)
+
+        return archived_file_path, title, description, metadata_path, archived_sub_path, extractor_service, has_audio_stream(archived_file_path)
 
     except Exception as e:
         logger.error(f"Failed to process video {url}: {e}", exc_info=True)
