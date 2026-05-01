@@ -39,38 +39,40 @@ def save_stats(stats):
     except Exception as e:
         logger.error(f"Failed to save stats: {e}")
 
-def log_archive(user_uuid, user_number, url, filepath, metadata_path=None, subtitle_path=None):
+def log_archive(user_uuid, user_number, url, filepath, metadata_path=None, subtitle_path=None, service=None):
     stats = load_stats()
-    
+
     if user_uuid not in stats["users"]:
         stats["users"][user_uuid] = {"archives": [], "failures": []}
-    
+
     # Auto-Discovery / Update User Info
     current_name = stats["users"][user_uuid].get("name")
     mapped_name = get_user_name(user_number)
-    
+
     # Update if we have a better name (non-hidden number) or if it's new
     if mapped_name != user_number:
         stats["users"][user_uuid]["name"] = mapped_name
         stats["users"][user_uuid]["phone"] = user_number
     elif not current_name:
-         stats["users"][user_uuid]["name"] = user_number # Fallback to number if no name found
-    
+        stats["users"][user_uuid]["name"] = user_number  # Fallback to number if no name found
+
     entry = {
         "url": url,
         "timestamp": datetime.datetime.now().isoformat(),
         "filepath": filepath,
         "metadata_path": metadata_path,
-        "subtitle_path": subtitle_path
+        "subtitle_path": subtitle_path,
     }
-    
+    if service is not None:
+        entry["service"] = service
+
     stats["users"][user_uuid]["archives"].append(entry)
     save_stats(stats)
     logger.info(f"Logged archive for {user_number}: {url}")
 
-def log_failure(user_uuid, user_number, url, error_message):
+def log_failure(user_uuid, user_number, url, error_message, service=None):
     stats = load_stats()
-    
+
     if user_uuid not in stats["users"]:
         stats["users"][user_uuid] = {"archives": [], "failures": []}
     elif "failures" not in stats["users"][user_uuid]:
@@ -79,19 +81,21 @@ def log_failure(user_uuid, user_number, url, error_message):
     # Auto-Discovery / Update User Info (Same logic as archive)
     current_name = stats["users"][user_uuid].get("name")
     mapped_name = get_user_name(user_number)
-    
+
     if mapped_name != user_number:
         stats["users"][user_uuid]["name"] = mapped_name
         stats["users"][user_uuid]["phone"] = user_number
     elif not current_name:
-         stats["users"][user_uuid]["name"] = user_number
+        stats["users"][user_uuid]["name"] = user_number
 
     entry = {
         "url": url,
         "timestamp": datetime.datetime.now().isoformat(),
-        "error": error_message
+        "error": error_message,
     }
-    
+    if service is not None:
+        entry["service"] = service
+
     stats["users"][user_uuid]["failures"].append(entry)
     save_stats(stats)
     logger.info(f"Logged failure for {user_number}: {url}")

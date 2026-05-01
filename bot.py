@@ -17,6 +17,7 @@ import personality
 import stats_manager
 import datetime
 from config import BOT_NUMBER, BOT_UUID, LOGS_DIR
+from transports import YankRequest, SignalReplyContext, parse_command
 
 # Ensure logs directory exists
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -48,7 +49,7 @@ shutdown_event = threading.Event()
 # Request Queue for Sequential Processing
 request_queue = queue.Queue()
 
-# Batch State Tracking: {batch_id: {total, results, group_id, user_id, source_number}}
+# Batch State Tracking: {batch_id: {total, results, reply_context, user_id}}
 batch_state = {}
 batch_state_lock = threading.Lock()
 
@@ -63,7 +64,7 @@ sys.excepthook = handle_uncaught_exception
 
 def handle_thread_exception(args):
     """Capture unhandled exceptions in threads (like subprocess readers)."""
-    logger.critical(f"Uncaught exception in thread {args.thread.name}:", 
+    logger.critical(f"Uncaught exception in thread {args.thread.name}:",
                     exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
 
 threading.excepthook = handle_thread_exception
@@ -76,25 +77,21 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def worker_thread(process):
+def worker_thread():
     """Worker thread that processes video requests sequentially."""
     logger.info("Worker thread started, waiting for jobs...")
     while not shutdown_event.is_set():
         try:
-            # Get request from queue with a timeout to check shutdown flag
-            item = request_queue.get(timeout=1.0)
-            url, group_id, user_id, source_number, batch_id = item
-
-            logger.info(f"Worker picked up job: {url} for {user_id}")
-            handle_video_request(url, group_id, user_id, source_number, process, batch_id=batch_id)
-            
+            req = request_queue.get(timeout=1.0)
+            logger.info(f"Worker picked up job: {req.url} for {req.user_id}")
+            handle_video_request(req)
             request_queue.task_done()
         except queue.Empty:
             continue
         except Exception as e:
             logger.error(f"Worker thread error: {e}", exc_info=True)
 
-def _record_batch_result(batch_id, url, success, process):
+def _record_batch_result(batch_id, url, success):
     """Record the result of one URL in a batch and send the summary if all are done."""
     with batch_state_lock:
         state = batch_state.get(batch_id)
@@ -103,56 +100,57 @@ def _record_batch_result(batch_id, url, success, process):
         state['results'].append((url, success))
         if len(state['results']) < state['total']:
             return
-        # All URLs in the batch are done — build and send the summary
         results = state['results']
-        group_id = state['group_id']
-        user_id = state['user_id']
+        reply_context = state['reply_context']
         del batch_state[batch_id]
 
     header = personality.get_batch_complete()
     lines = [f"{'✅' if ok else '❌'} {u}" for u, ok in results]
     msg = header + "\n" + "\n".join(lines)
     logger.info(f"Batch {batch_id} complete, sending summary.")
-    signal_manager.send_message(process, group_id, user_id, msg)
+    reply_context.send(msg)
 
-def handle_video_request(url, group_id, user_id, source_number, process, batch_id=None):
+def handle_video_request(req):
     """Handles a single video archival request."""
+    url = req.url
+    user_id = req.user_id
+    ctx = req.reply_context
     logger.info(f"Processing request for {url} from {user_id}")
     success = False
 
     # 1. Acknowledge with a whacky ACK quip
-    signal_manager.send_message(process, group_id, user_id, personality.get_ack())
+    ctx.send(personality.get_ack())
 
     # 2. Process
     try:
-        # Define callback for heavy compression notification
         def notify_heavy_compression():
             quip = personality.get_heavy_compression_quip()
             logger.info(f"File too large, sending heavy compression notification: {quip}")
-            signal_manager.send_message(process, group_id, user_id, quip)
+            ctx.send(quip)
 
-        # Define callback for yt-dlp update+retry notification
         def notify_retry():
             msg = "Hmm, that didn't work. Let me update my yt-dlp and try again... 🪗🔧"
             logger.info("Download failed, notifying chat of yt-dlp update retry.")
-            signal_manager.send_message(process, group_id, user_id, msg)
+            ctx.send(msg)
 
-        video_data = video_handler.process_video(url, user_id=user_id, progress_callback=notify_heavy_compression, retry_callback=notify_retry)
-        # video_data now returns: archived_file_path, title, description, metadata_path, sub_path, service, has_audio
-        video_path, title, description, metadata_path, sub_path, service, has_audio = video_data
+        video_data = video_handler.process_video(
+            url, user_id=user_id,
+            progress_callback=notify_heavy_compression,
+            retry_callback=notify_retry,
+            upload_limit_mb=ctx.upload_limit_mb(),
+            service=ctx.service,
+        )
+        video_path, title, description, metadata_path, sub_path, extractor_service, has_audio = video_data
 
         if video_path and os.path.exists(video_path):
-            # Construct formatted message
             quip = personality.get_quip()
             msg_parts = [quip]
 
-            if service == 'TikTok':
-                # TikTok only has a caption, so we use one clean header
+            if extractor_service == 'TikTok':
                 caption = title if title else description
                 display_caption = caption.strip() if caption and caption.strip() else "N/A"
                 msg_parts.append(f"== Caption ==\n{display_caption}")
             else:
-                # Other services (YouTube, etc.) have distinct titles and descriptions
                 display_title = title.strip() if title and title.strip() else "N/A"
                 display_description = description.strip() if description and description.strip() else "N/A"
                 msg_parts.append(f"== Title ==\n{display_title}")
@@ -164,36 +162,38 @@ def handle_video_request(url, group_id, user_id, source_number, process, batch_i
             final_message = "\n\n".join(msg_parts)
 
             logger.info(f"Successfully processed {url}, sending structured message.")
-            signal_manager.send_message(process, group_id, user_id, final_message, [video_path])
+            ctx.send(final_message, [video_path])
 
             # 3. Log Stats
-            stats_manager.log_archive(user_id, source_number, url, video_path,
-                                     metadata_path=metadata_path, subtitle_path=sub_path)
+            stats_manager.log_archive(user_id, ctx.source_id, url, video_path,
+                                      metadata_path=metadata_path, subtitle_path=sub_path,
+                                      service=ctx.service)
             success = True
         else:
             logger.warning(f"Failed to process {url}")
-            signal_manager.send_message(process, group_id, user_id, personality.get_error())
-            stats_manager.log_failure(user_id, source_number, url, "Unknown failure (no video path)")
+            ctx.send(personality.get_error())
+            stats_manager.log_failure(user_id, ctx.source_id, url, "Unknown failure (no video path)",
+                                      service=ctx.service)
 
     except video_handler.FileTooLargeError as e:
         logger.error(str(e))
-        signal_manager.send_message(process, group_id, user_id, "This video is too massive for Signal! It's bigger than my Accordion collection!")
-        stats_manager.log_failure(user_id, source_number, url, "File too large")
+        ctx.send("This video is too massive for Signal! It's bigger than my Accordion collection!")
+        stats_manager.log_failure(user_id, ctx.source_id, url, "File too large", service=ctx.service)
     except video_handler.UnsupportedURLError as e:
         logger.warning(str(e))
-        signal_manager.send_message(process, group_id, user_id, str(e))
-        stats_manager.log_failure(user_id, source_number, url, str(e))
+        ctx.send(str(e))
+        stats_manager.log_failure(user_id, ctx.source_id, url, str(e), service=ctx.service)
     except video_handler.DownloadError as e:
         logger.warning(str(e))
-        signal_manager.send_message(process, group_id, user_id, str(e))
-        stats_manager.log_failure(user_id, source_number, url, str(e))
+        ctx.send(str(e))
+        stats_manager.log_failure(user_id, ctx.source_id, url, str(e), service=ctx.service)
     except Exception as e:
         logger.error(f"Error processing video: {e}", exc_info=True)
-        signal_manager.send_message(process, group_id, user_id, f"Error occurred: {str(e)}")
-        stats_manager.log_failure(user_id, source_number, url, str(e))
+        ctx.send(f"Error occurred: {str(e)}")
+        stats_manager.log_failure(user_id, ctx.source_id, url, str(e), service=ctx.service)
     finally:
-        if batch_id is not None:
-            _record_batch_result(batch_id, url, success, process)
+        if req.batch_id is not None:
+            _record_batch_result(req.batch_id, url, success)
 
 def process_incoming_message(line, process):
     try:
@@ -201,34 +201,29 @@ def process_incoming_message(line, process):
         if 'method' in msg and msg['method'] == 'receive':
             envelope = msg.get('params', {}).get('envelope', {})
             data_message = envelope.get('dataMessage')
-            
+
             if data_message:
                 message_text = (data_message.get('message') or '').strip()
                 source = envelope.get('source')
                 if message_text:
-                    # Prefer UUID for identifying folders/stats
                     user_id = source if isinstance(source, str) else (source.get('uuid') or source.get('number') or 'Unknown')
                     source_number = source if isinstance(source, str) else (source.get('number') or source.get('uuid') or 'Unknown')
-                    
+
                     group_info = data_message.get('groupInfo')
                     group_id = group_info.get('groupId') if group_info else None
 
-                    # Debug: log all group messages to diagnose mention detection
                     if group_id:
                         logger.info(f"Group message received. mentions={data_message.get('mentions', [])} bodyRanges={data_message.get('bodyRanges', [])} text={message_text[:80]!r}")
 
-                    # 1. Check for @mentions of Al in groups
                     mentions = data_message.get('mentions', [])
                     body_ranges = data_message.get('bodyRanges', [])
                     is_mentioned = False
 
-                    # Check legacy mentions array
                     for mention in mentions:
                         if mention.get('number') == BOT_NUMBER or (BOT_UUID and mention.get('uuid') == BOT_UUID):
                             is_mentioned = True
                             break
 
-                    # Check bodyRanges (newer signal-cli versions)
                     if not is_mentioned:
                         for r in body_ranges:
                             mention_uuid = r.get('mentionUuid') or r.get('uuid')
@@ -238,75 +233,64 @@ def process_incoming_message(line, process):
 
                     if not is_mentioned and (mentions or body_ranges):
                         logger.info(f"Unmatched mentions (check BOT_UUID config): mentions={mentions} bodyRanges={body_ranges}")
-                    
-                    # 2. Check for "Yank {url}" OR (mentioned AND contains URL)
-                    delete_match = re.search(r'(?:Al\s+delete|delete)\s+(https?://\S+)', message_text, re.IGNORECASE)
-                    if delete_match:
-                        url = delete_match.group(1)
+
+                    is_dm = group_id is None
+                    intent = parse_command(message_text, is_mentioned, is_dm)
+                    ctx = SignalReplyContext(
+                        process=process,
+                        group_id=group_id,
+                        recipient_number=source_number,
+                        user_id=user_id,
+                        source_id=source_number,
+                    )
+
+                    if intent[0] == 'delete':
+                        url = intent[1]
                         logger.info(f"Processing delete request: {url}")
                         stats_manager.delete_archive(url)
-                        signal_manager.send_message(process, group_id, user_id, f"Consider it gone! I've scrubbed that video from my digital accordion. 🪗🧹")
+                        ctx.send("Consider it gone! I've scrubbed that video from my digital accordion. 🪗🧹")
                         return
 
-                    # Extract all URLs robustly: split on any whitespace/comma combo,
-                    # strip trailing punctuation, keep tokens that start with http(s)://
-                    tokens = re.split(r'[\s,]+', message_text)
-                    urls = [t.strip('.,;') for t in tokens if re.match(r'https?://', t)]
-                    is_yank = bool(re.search(r'\b(?:Yank|Yoink)\b', message_text, re.IGNORECASE))
-
-                    if (is_yank or is_mentioned) and urls:
+                    if intent[0] == 'yank':
+                        urls = intent[1]
                         if len(urls) == 1:
                             logger.info(f"Queuing video request: {urls[0]}")
-                            request_queue.put((urls[0], group_id, user_id, source_number, None))
+                            request_queue.put(YankRequest(url=urls[0], user_id=user_id, batch_id=None, reply_context=ctx))
                         else:
                             batch_id = str(uuid.uuid4())
                             with batch_state_lock:
                                 batch_state[batch_id] = {
                                     'total': len(urls),
                                     'results': [],
-                                    'group_id': group_id,
+                                    'reply_context': ctx,
                                     'user_id': user_id,
-                                    'source_number': source_number,
                                 }
                             logger.info(f"Queuing batch of {len(urls)} URLs, batch_id={batch_id}")
-                            signal_manager.send_message(process, group_id, user_id, personality.get_batch_ack(len(urls)))
+                            ctx.send(personality.get_batch_ack(len(urls)))
                             for url in urls:
                                 logger.info(f"  Queuing batch URL: {url}")
-                                request_queue.put((url, group_id, user_id, source_number, batch_id))
+                                request_queue.put(YankRequest(url=url, user_id=user_id, batch_id=batch_id, reply_context=ctx))
                         return
 
-                    # 3. Check for "stats" command
-                    if re.search(r'\b(Al,?\s+stats|stats,?\s+Al)\b', message_text, re.IGNORECASE) or \
-                       (is_mentioned and re.search(r'\bstats\b', message_text, re.IGNORECASE)):
-                        
+                    if intent[0] == 'stats':
                         stats_msg, top_user = stats_manager.get_formatted_stats()
-                        
-                        # Add Top User Quip if applicable
                         if top_user and top_user == user_id:
                             stats_msg += f"\n\n{personality.get_top_user_quip()}"
-                            
-                        signal_manager.send_message(process, group_id, user_id, stats_msg)
+                        ctx.send(stats_msg)
                         return
 
-                    # 4. Check for "how are you" / "what's up"
-                    if re.search(r'\bAl,?\s+(how\s+are\s+you|how\'s\s+it\s+going|what\'s\s+up|howdy)\b', message_text, re.IGNORECASE) or \
-                       re.search(r'\b(how\s+are\s+you|how\'s\s+it\s+going|what\'s\s+up|howdy),?\s+Al\b', message_text, re.IGNORECASE) or \
-                       (is_mentioned and re.search(r'\b(how\s+are\s+you|how\'s\s+it\s+going|what\'s\s+up|howdy)\b', message_text, re.IGNORECASE)):
-                        signal_manager.send_message(process, group_id, user_id, personality.get_conversational())
+                    if intent[0] == 'conversational':
+                        ctx.send(personality.get_conversational())
                         return
 
-                    # 5. Check for Greetings
-                    if re.search(r'\b(Al,?\s+(hi|hello|hey|yo|howdy)|(hi|hello|hey|yo|howdy)\s+,?Al)\b', message_text, re.IGNORECASE) or \
-                       (is_mentioned and re.search(r'\b(hi|hello|hey|yo|howdy)\b', message_text, re.IGNORECASE)):
-                        signal_manager.send_message(process, group_id, user_id, personality.get_greeting())
+                    if intent[0] == 'greeting':
+                        ctx.send(personality.get_greeting())
                         return
 
-                    # 6. Check for "sites" command
-                    if re.search(r'\b(Al,?\s+sites|sites,?\s+Al)\b', message_text, re.IGNORECASE) or \
-                       (is_mentioned and re.search(r'\bsites\b', message_text, re.IGNORECASE)):
-                        signal_manager.send_message(process, group_id, user_id, personality.get_sites_quip())
+                    if intent[0] == 'sites':
+                        ctx.send(personality.get_sites_quip())
                         return
-                        
+
     except json.JSONDecodeError:
         pass
     except Exception as e:
@@ -361,7 +345,6 @@ def monitor_stderr(process, daemon_shutdown):
             break
         clean_line = line.strip()
         if clean_line:
-            # Check for benign info messages from signal-cli that might appear in stderr
             if "INFO" in clean_line:
                 logger.info(f"Signal-cli: {clean_line}")
             else:
@@ -380,21 +363,38 @@ def monitor_stderr(process, daemon_shutdown):
                     break
 
 def main():
+    import config as _config
+
+    # Worker thread is started once; it no longer holds a reference to the Signal process
+    t_worker = threading.Thread(target=worker_thread, daemon=True)
+    t_worker.start()
+
+    # Start Rocket.Chat manager if enabled
+    rc_manager = None
+    if _config.ROCKETCHAT_ENABLED:
+        try:
+            from rocket_chat_manager import RocketChatManager
+            rc_manager = RocketChatManager(
+                url=_config.ROCKETCHAT_URL,
+                username=_config.ROCKETCHAT_USERNAME,
+                password=_config.ROCKETCHAT_PASSWORD,
+                bot_username=_config.ROCKETCHAT_BOT_USERNAME,
+                request_queue=request_queue,
+                shutdown_event=shutdown_event,
+                batch_state=batch_state,
+                batch_state_lock=batch_state_lock,
+            )
+            rc_manager.start()
+            logger.info("Rocket.Chat manager started.")
+        except Exception as e:
+            logger.error(f"Rocket.Chat startup failed (Signal-only mode continues): {e}", exc_info=True)
+            rc_manager = None
+
     while not shutdown_event.is_set():
         logger.info("Starting Al YankoVid...")
         process = signal_manager.run_signal_daemon()
-        
+
         daemon_shutdown = threading.Event()
-        
-        # Start the worker thread for sequential video processing
-        # We start it once per daemon run (or could be global, but passing 'process' is needed)
-        # Actually better to make it global or passed in, but 'process' changes on restart.
-        # So we start a new worker each time we start the daemon, and ensure the old one dies?
-        # The 'process' arg in worker_thread is the ONLY thing determining where it sends.
-        # So yes, start a new worker thread.
-        
-        t_worker = threading.Thread(target=worker_thread, args=(process,), daemon=True)
-        t_worker.start()
 
         def monitor_wrapper(proc, event):
             while not event.is_set() and not shutdown_event.is_set():
@@ -410,7 +410,7 @@ def main():
         t_stderr.start()
 
         logger.info("Signal-cli daemon started, waiting for messages...")
-        
+
         try:
             while not shutdown_event.is_set() and not daemon_shutdown.is_set():
                 if process.poll() is not None:
@@ -418,7 +418,7 @@ def main():
                     daemon_shutdown.set()
                     break
                 time.sleep(0.1)
-                
+
         except KeyboardInterrupt:
             shutdown_event.set()
         finally:
@@ -429,12 +429,15 @@ def main():
                     subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True)
                 else:
                     process.terminate()
-            
+
             if shutdown_event.is_set():
                 break
             else:
                 logger.info("Daemon crashed or exited. Restarting in 5 seconds...")
                 time.sleep(5)
+
+    if rc_manager:
+        rc_manager.stop()
 
     logger.info("Shutdown complete.")
 
