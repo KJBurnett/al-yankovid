@@ -32,3 +32,10 @@ if not os.path.exists(DATA_DIR):
 STATS_FILE = os.path.join(DATA_DIR, 'stats.json')
 USERS_MAP_FILE = os.path.join(DATA_DIR, 'users_map.json')
 
+# Rocket.Chat (optional — set ROCKETCHAT_ENABLED=true to activate)
+ROCKETCHAT_ENABLED = os.getenv('ROCKETCHAT_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+ROCKETCHAT_URL = os.getenv('ROCKETCHAT_URL', '').rstrip('/')
+ROCKETCHAT_USERNAME = os.getenv('ROCKETCHAT_USERNAME', '')
+ROCKETCHAT_PASSWORD = os.getenv('ROCKETCHAT_PASSWORD', '')
+ROCKETCHAT_BOT_USERNAME = os.getenv('ROCKETCHAT_BOT_USERNAME', 'al-yankovid')
+
