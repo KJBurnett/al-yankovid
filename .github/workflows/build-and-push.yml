@@ -4,6 +4,11 @@ on:
   push:
     branches: [ main ]
     tags: ['v*']
+  schedule:
+    # Weekly rebuild (Mondays 08:00 UTC) so the image always ships the latest
+    # signal-cli. This prevents the bot from silently breaking when Signal makes
+    # server-side changes that require an updated signal-cli.
+    - cron: '0 8 * * 1'
   workflow_dispatch:
 
 permissions:
