@@ -91,8 +91,59 @@ Simply press **`Ctrl+C`** in the terminal window. This works on Windows, Mac, an
 -   **Mention**: Just tag `@Al YankoVid` followed by a `{url}` in a group chat.
 -   **Greetings**: Say "Hi Al" or "How are you Al?" to see his whacky responses!
 
+## Rocket.Chat (optional)
+
+Al can serve a second front-end protocol — Rocket.Chat — in the same process, using the same archive, stats, and downloader pipeline.
+
+### 1. Create a dedicated bot account on your RC server
+
+Log in as an admin, go to **Administration → Users**, and create a user with the username `al-yankovid`. Give it **Send Messages** and **Upload Files** permissions (the default User role is fine for public/DM rooms; add it to private groups manually as needed).
+
+### 2. Set environment variables
+
+Add the following to your `.env` (never commit this file):
+
+```
+ROCKETCHAT_ENABLED=true
+ROCKETCHAT_URL=https://your-rocketchat-server.com
+ROCKETCHAT_USERNAME=al-yankovid
+ROCKETCHAT_PASSWORD=<bot account password>
+ROCKETCHAT_BOT_USERNAME=al-yankovid
+```
+
+### 3. Verify startup
+
+Start the bot normally (`./run.sh`, `run.bat`, or `docker compose up`). Look for these log lines:
+
+```
+Rocket.Chat manager started.
+Max upload size from RC: <N> MB
+```
+
+### 4. Trigger words and commands
+
+The RC front-end mirrors Signal exactly:
+
+| Context | Trigger |
+|---|---|
+| DM | Any URL (no keyword required) |
+| Channel / group | `@al-yankovid <url>` or `Yank <url>` or `Yoink <url>` |
+| Stats | `Al, stats` (or `@al-yankovid stats`) |
+| Sites | `Al, sites` (or `@al-yankovid sites`) |
+| Delete | `Al delete <url>` |
+
+Multi-URL batches work the same as on Signal: list several URLs in one message for a batch ack and a summary when all are done.
+
+### 5. Signal-only deploys are unaffected
+
+`ROCKETCHAT_ENABLED` defaults to `false`. If it is not set (or set to `false`), the RC manager is never started and the bot behaves exactly as before.
+
+---
+
 ## Structure
--   `bot.py`: Main entry point and message router.
+-   `bot.py`: Main entry point and message router (Signal + optional RC).
+-   `transports.py`: `YankRequest`, `SignalReplyContext`, `RocketChatReplyContext`, `parse_command`.
+-   `rocket_chat_manager.py`: Rocket.Chat DDP WebSocket listener and REST sender.
 -   `signal_manager.py`: Handles the Signal JSON-RPC daemon.
 -   `video_handler.py`: Logic for downloading and FFmpeg optimization.
 -   `personality.py`: The brains behind the quips and polka-tastic attitude!

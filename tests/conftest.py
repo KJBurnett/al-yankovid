@@ -8,6 +8,8 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
+from transports import YankRequest, SignalReplyContext
+
 
 def _make_completed(stdout='', stderr='', returncode=0):
     class Completed:
@@ -55,3 +57,18 @@ def fake_process():
 @pytest.fixture
 def make_subprocess_result():
     return _make_completed
+
+
+@pytest.fixture
+def make_signal_req(fake_process):
+    """Build a YankRequest wrapping a SignalReplyContext over fake_process."""
+    def _make(url, group_id=None, user_id='u', source_id='+1', batch_id=None):
+        ctx = SignalReplyContext(
+            process=fake_process,
+            group_id=group_id,
+            recipient_number=source_id,
+            user_id=user_id,
+            source_id=source_id,
+        )
+        return YankRequest(url=url, user_id=user_id, batch_id=batch_id, reply_context=ctx)
+    return _make

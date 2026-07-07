@@ -473,3 +473,37 @@ def test_process_video_oversize_raises_FileTooLargeError(tmp_env, monkeypatch, t
     with pytest.raises(vh.FileTooLargeError):
         vh.process_video(url, user_id='tester', progress_callback=progress_cb)
     assert called['progress']
+
+
+def test_process_video_upload_limit_mb_kwarg_honored(tmp_env, monkeypatch, tmp_path):
+    """upload_limit_mb overrides UPLOAD_LIMIT_MB for the oversized-file guard."""
+    import pytest
+    vh = importlib.import_module('video_handler')
+    importlib.reload(vh)
+
+    url = 'http://example.com/medium'
+
+    def fake_info(u):
+        return {'id': 'MID', 'title': 'M', 'description': '', 'extractor_key': 'Generic', 'webpage_url': u}
+    monkeypatch.setattr(vh, 'get_video_info', fake_info)
+
+    def fake_download(u, out_dir, **kwargs):
+        os.makedirs(out_dir, exist_ok=True)
+        p = os.path.join(out_dir, 'M [MID].mp4')
+        with open(p, 'wb') as f:
+            f.write(b'x')
+        return p
+    monkeypatch.setattr(vh, 'download_video', fake_download)
+    monkeypatch.setattr(vh, 'compress_video', lambda p, *a, **k: p)
+
+    # Report 10 MB — under UPLOAD_LIMIT_MB (98) but over our custom cap (5)
+    monkeypatch.setattr(vh, 'get_file_size_mb', lambda p: 10)
+    monkeypatch.setattr(vh, 'has_audio_stream', lambda p: True)
+
+    # With default limit (98 MB) the 10 MB file should succeed
+    result = vh.process_video(url, user_id='tester')
+    assert result[0] is not None
+
+    # With upload_limit_mb=5 the same 10 MB file must raise FileTooLargeError
+    with pytest.raises(vh.FileTooLargeError):
+        vh.process_video(url + '?custom', user_id='tester', upload_limit_mb=5)
