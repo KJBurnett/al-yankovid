@@ -59,6 +59,13 @@ Al requires a separate Signal number. **Do not use your own number.**
 
 ### Docker signal-cli behavior
 - The Docker image resolves `SIGNAL_CLI_VERSION=latest` at build time by default.
+- On every container start, `entrypoint.sh` also auto-updates `signal-cli` to the
+  latest release (set `SIGNAL_CLI_AUTO_UPDATE=false` to disable). This keeps the
+  bot working when Signal makes server-side changes that require a newer
+  `signal-cli`; if the update check fails (e.g. no network), the existing version
+  is kept and startup continues.
+- A weekly scheduled GitHub Actions build also rebuilds the image so a freshly
+  pulled image ships the latest `signal-cli`.
 - The Docker image installs **Temurin JRE 25** by default to satisfy current `signal-cli` requirements.
 - You can pin a specific version when building:
   ```bash
