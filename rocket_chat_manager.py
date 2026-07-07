@@ -29,6 +29,7 @@ class RocketChatManager:
         self._auth_token = None
         self._user_id = None   # RC immutable _id of the bot account
         self.max_upload_mb = 100
+        self._room_type_cache = {}
 
         self._thread = None
 
@@ -108,6 +109,28 @@ class RocketChatManager:
         except Exception as e:
             logger.warning(f"Could not fetch RC FileUpload_MaxFileSize: {e} — using fallback 100 MB")
 
+    def _room_type(self, rid):
+        """Resolve a room's type ('d'/'c'/'p') via rooms.info, cached per rid.
+
+        stream-room-messages does not include the room type, so DM detection
+        needs this out-of-band lookup. Only successful (non-empty) results are
+        cached so transient failures are retried.
+        """
+        if not rid:
+            return ""
+        cached = self._room_type_cache.get(rid)
+        if cached:
+            return cached
+        try:
+            resp = self._authed_get(f"/api/v1/rooms.info?roomId={rid}")
+            t = (resp.json().get("room", {}) or {}).get("t", "") or ""
+        except Exception as e:
+            logger.warning(f"Could not resolve RC room type for {rid}: {e}")
+            t = ""
+        if t:
+            self._room_type_cache[rid] = t
+        return t
+
     # ------------------------------------------------------------------
     # WebSocket / DDP loop
     # ------------------------------------------------------------------
@@ -115,16 +138,42 @@ class RocketChatManager:
     def _ws_loop(self):
         attempt = 0
         while not self._shutdown_event.is_set():
+            session_start = time.monotonic()
+            logged_in = False
             try:
-                self._run_ws_session()
-                attempt = 0
+                logged_in = self._run_ws_session()
             except Exception as e:
-                if self._shutdown_event.is_set():
-                    break
-                delay = min(60, 2 ** attempt)
-                logger.warning(f"RC WebSocket error: {e}. Reconnecting in {delay}s (attempt {attempt})")
-                attempt += 1
-                self._shutdown_event.wait(delay)
+                logger.warning(f"RC WebSocket error: {e}")
+
+            if self._shutdown_event.is_set():
+                break
+
+            # run_forever() returns *normally* on connection-refused, DNS
+            # failure, clean server close, and WS login rejection — so backoff
+            # must be applied here, not only in the except branch, or we spin a
+            # hot reconnect loop. Only reset backoff after a session that stayed
+            # logged in for a while (a genuinely healthy connection).
+            connected_seconds = time.monotonic() - session_start
+            if logged_in and connected_seconds >= 30:
+                attempt = 0
+            else:
+                attempt = min(attempt + 1, 6)  # cap so delay tops out at 60s
+
+            # A failed WS login usually means the resume token is stale; refresh
+            # it via REST before the next attempt (the WS path never does this
+            # on its own, unlike _authed_get/_authed_post).
+            if not logged_in:
+                try:
+                    self._login()
+                except Exception as e:
+                    logger.warning(f"RC re-login during reconnect failed: {e}")
+
+            delay = min(60, 2 ** attempt)
+            logger.info(
+                f"RC WebSocket session ended (logged_in={logged_in}, "
+                f"up={connected_seconds:.0f}s). Reconnecting in {delay}s (attempt {attempt})"
+            )
+            self._shutdown_event.wait(delay)
 
     def _run_ws_session(self):
         import websocket  # websocket-client
@@ -224,6 +273,8 @@ class RocketChatManager:
         finally:
             ping_stop.set()
 
+        return login_event.is_set()
+
     # ------------------------------------------------------------------
     # Message handling
     # ------------------------------------------------------------------
@@ -243,10 +294,12 @@ class RocketChatManager:
         if not text:
             return
 
-        # Determine room type: 'd' = DM, 'c' = channel, 'p' = private group
-        # The eventName in __my_messages__ is the room_id, so we fall back to t field
-        room_type = rc_msg.get("t") or rc_msg.get("roomType", "")
-        # Try to get from the subscription args[1] if available (not always present)
+        # Determine room type: 'd' = DM, 'c' = channel, 'p' = private group.
+        # stream-room-messages payloads carry *message* fields and usually omit
+        # the room's 't' property, so fall back to an out-of-band rooms.info
+        # lookup (cached per rid) — otherwise is_dm is always False and bare
+        # URLs in a DM would never trigger a yank.
+        room_type = rc_msg.get("t") or rc_msg.get("roomType") or self._room_type(rid)
         is_dm = room_type == "d"
 
         # Mention detection

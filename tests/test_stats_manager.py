@@ -68,3 +68,40 @@ def test_delete_archive_removes_files_and_updates_index_and_stats(tmp_env, tmp_p
         stats = json.load(f)
     for data in stats.get('users', {}).values():
         assert all(a.get('url') != url for a in data.get('archives', []))
+
+
+def test_concurrent_log_archive_preserves_all_entries(tmp_env, tmp_path):
+    """Concurrent writers (worker thread + Rocket.Chat WS thread) must not lose
+    entries to an unsynchronized load->mutate->save race on stats.json."""
+    import threading
+    import time
+    sm = _reload_stats_manager()
+
+    # Widen the race window: hold the in-memory state before writing so that,
+    # without the lock, concurrent callers would clobber each other's writes.
+    orig_save = sm.save_stats
+
+    def slow_save(stats):
+        time.sleep(0.02)
+        orig_save(stats)
+
+    sm.save_stats = slow_save
+    try:
+        def worker(i):
+            fp = tmp_path / f'f{i}.mp4'
+            fp.write_text('x')
+            sm.log_archive(f'user-{i}', f'+{i}', f'http://example.com/{i}', str(fp))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sm.save_stats = orig_save
+
+    data = sm.load_stats()
+    assert len(data['users']) == 5
+    for i in range(5):
+        assert f'user-{i}' in data['users']
+

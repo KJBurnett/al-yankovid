@@ -378,6 +378,103 @@ def test_reconnect_on_ws_drop_does_not_crash(tmp_env, monkeypatch):
     assert call_count[0] == 3
 
 
+def test_ws_loop_backs_off_on_normal_return(tmp_env, monkeypatch):
+    """run_forever() returning normally (no exception) must still apply backoff
+    and refresh the auth token — otherwise a down/rejecting server causes a
+    zero-delay hot reconnect loop with a stale resume token."""
+    rcm = importlib.import_module('rocket_chat_manager')
+    importlib.reload(rcm)
+    _make_login_resp(monkeypatch, rcm)
+    _make_settings_resp(monkeypatch, rcm)
+
+    q = queue.Queue()
+    shutdown = threading.Event()
+    mgr = rcm.RocketChatManager(
+        url="https://x.com", username="u", password="pw", bot_username="b",
+        request_queue=q, shutdown_event=shutdown,
+        batch_state={}, batch_state_lock=threading.Lock(),
+    )
+    mgr._login()
+
+    call_count = [0]
+
+    def fake_run_ws_session():
+        call_count[0] += 1
+        if call_count[0] >= 3:
+            shutdown.set()
+        return False  # normal return; WS login never succeeded
+
+    monkeypatch.setattr(mgr, '_run_ws_session', fake_run_ws_session)
+
+    relogin = [0]
+    monkeypatch.setattr(mgr, '_login', lambda: relogin.__setitem__(0, relogin[0] + 1))
+
+    waits = []
+    monkeypatch.setattr(shutdown, 'wait', lambda t: waits.append(t))
+
+    mgr._ws_loop()
+
+    # Backoff delays were applied on normal return (not a zero-delay hot loop)
+    assert waits and all(w > 0 for w in waits)
+    # Stale resume token refreshed between failed sessions
+    assert relogin[0] >= 1
+
+
+def test_on_message_dm_detected_via_rooms_info_when_t_absent(tmp_env, monkeypatch):
+    """Real stream-room-messages payloads omit the room 't' property; the bot
+    must resolve it via rooms.info so a bare URL DM still queues a yank."""
+    rcm = importlib.import_module('rocket_chat_manager')
+    importlib.reload(rcm)
+    mgr, q, _ = _build_manager(monkeypatch, rcm, tmp_env)
+
+    class _RoomResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"room": {"t": "d"}}
+
+    monkeypatch.setattr(rcm.requests, 'get', lambda *a, **k: _RoomResp())
+
+    msg = {
+        "u": {"_id": "uid1", "username": "alice"},
+        "rid": "DM_rid",
+        "msg": "https://youtube.com/v?v=abc",
+        "mentions": [],
+        # note: no 't' field, mirroring real RC stream-room-messages frames
+    }
+    mgr._on_message(msg, "DM_rid")
+
+    assert not q.empty()
+    req = q.get_nowait()
+    assert req.url == "https://youtube.com/v?v=abc"
+    # Resolved room type is cached to avoid a lookup per message
+    assert mgr._room_type_cache.get("DM_rid") == "d"
+
+
+def test_on_message_channel_via_rooms_info_no_keyword_ignored(tmp_env, monkeypatch):
+    """A bare URL in a channel (resolved via rooms.info) with no mention/keyword
+    stays ignored — DM-implicit-yank must not leak into channels."""
+    rcm = importlib.import_module('rocket_chat_manager')
+    importlib.reload(rcm)
+    mgr, q, _ = _build_manager(monkeypatch, rcm, tmp_env)
+
+    class _RoomResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"room": {"t": "c"}}
+
+    monkeypatch.setattr(rcm.requests, 'get', lambda *a, **k: _RoomResp())
+
+    msg = {
+        "u": {"_id": "uid1", "username": "alice"},
+        "rid": "ch_rid",
+        "msg": "https://youtube.com/v?v=abc",
+        "mentions": [],
+    }
+    mgr._on_message(msg, "ch_rid")
+
+    assert q.empty()
+
+
 def test_401_triggers_relogin_then_retry(tmp_env, monkeypatch):
     """An HTTP 401 on a request causes _login() to be called and the request retried."""
     rcm = importlib.import_module('rocket_chat_manager')
