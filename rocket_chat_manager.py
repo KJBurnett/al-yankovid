@@ -1,5 +1,6 @@
 import json
 import logging
+import mimetypes
 import threading
 import time
 import uuid
@@ -379,13 +380,47 @@ class RocketChatManager:
             self._authed_post("/api/v1/chat.postMessage", json={"roomId": room_id, "text": chunk})
 
     def _upload_file(self, room_id, file_path, msg=None):
+        """Upload a file using the Rocket.Chat 8.0 two-step media flow.
+
+        rooms.upload/:rid was removed in RC 8.0; uploads now go through
+        rooms.media/:rid (stores the file, returns a file id) followed by
+        rooms.mediaConfirm/:rid/:fileId (publishes it to the room feed with an
+        optional message). The file is buffered into memory so a 401 re-login
+        retry inside _authed_post can replay the multipart body.
+        """
+        filename = os.path.basename(file_path)
         with open(file_path, 'rb') as f:
-            filename = os.path.basename(file_path)
-            files = {"file": (filename, f)}
-            data = {}
-            if msg:
-                data["msg"] = msg
-            self._authed_post(f"/api/v1/rooms.upload/{room_id}", files=files, data=data)
+            file_bytes = f.read()
+
+        # requests does NOT set a Content-Type on the file part from the
+        # filename — a 2-tuple part defaults to text/plain, so RC 8.0 stores
+        # the upload as a generic file instead of a playable video. Send an
+        # explicit content-type so RC renders an inline video player.
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+        media = self._authed_post(
+            f"/api/v1/rooms.media/{room_id}",
+            files={"file": (filename, file_bytes, content_type)},
+        )
+        file_id = ((media.json() or {}).get("file") or {}).get("_id")
+        if not file_id:
+            raise RuntimeError(f"rooms.media returned no file id: {media.text[:200]}")
+
+        # Keep the caption on the file when it fits RC's message length cap;
+        # otherwise attach the file with no caption and send the text separately.
+        caption = msg or ""
+        overflow = None
+        if len(caption) > 4000:
+            overflow = caption
+            caption = ""
+
+        self._authed_post(
+            f"/api/v1/rooms.mediaConfirm/{room_id}/{file_id}",
+            json={"msg": caption},
+        )
+
+        if overflow:
+            self._post_message(room_id, overflow)
 
     @staticmethod
     def _chunk_text(text, max_len=5000):

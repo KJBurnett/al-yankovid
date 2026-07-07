@@ -317,7 +317,9 @@ def test_send_text_calls_chat_postMessage(tmp_env, monkeypatch):
     assert any(c[1].get('json', {}).get('roomId') == 'room123' for c in calls)
 
 
-def test_send_with_attachment_calls_rooms_upload(tmp_env, monkeypatch, tmp_path):
+def test_send_with_attachment_uses_rooms_media_two_step(tmp_env, monkeypatch, tmp_path):
+    """RC 8.0 removed rooms.upload; uploads must use rooms.media then
+    rooms.mediaConfirm with the returned file id."""
     rcm = importlib.import_module('rocket_chat_manager')
     importlib.reload(rcm)
     mgr, _, _ = _build_manager(monkeypatch, rcm, tmp_env)
@@ -327,20 +329,58 @@ def test_send_with_attachment_calls_rooms_upload(tmp_env, monkeypatch, tmp_path)
 
     calls = []
 
-    class _Resp:
+    class _MediaResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"file": {"_id": "fid123", "url": "/x"}, "success": True}
+
+    class _OkResp:
         status_code = 200
         def raise_for_status(self): pass
         def json(self): return {}
 
     def fake_post(url, **kwargs):
-        calls.append(url)
-        return _Resp()
+        calls.append((url, kwargs))
+        if "/rooms.media/" in url:
+            return _MediaResp()
+        return _OkResp()
 
     monkeypatch.setattr(rcm.requests, 'post', fake_post)
 
     mgr.send("room123", "check this out", attachments=[str(video)])
 
-    assert any("/api/v1/rooms.upload/room123" in c for c in calls)
+    urls = [c[0] for c in calls]
+    assert any("/api/v1/rooms.media/room123" in u for u in urls)
+    assert any("/api/v1/rooms.mediaConfirm/room123/fid123" in u for u in urls)
+    # The removed endpoint must never be called
+    assert not any("rooms.upload" in u for u in urls)
+    # The file part must carry an explicit video/mp4 content-type (3-tuple),
+    # otherwise RC stores it as text/plain and won't render an inline player.
+    media_call = next(c for c in calls if "/rooms.media/" in c[0])
+    file_tuple = media_call[1]["files"]["file"]
+    assert len(file_tuple) == 3 and file_tuple[2] == "video/mp4"
+
+
+def test_upload_raises_when_media_returns_no_file_id(tmp_env, monkeypatch, tmp_path):
+    """A rooms.media response without a file id must fail loudly rather than
+    silently confirming nothing."""
+    rcm = importlib.import_module('rocket_chat_manager')
+    importlib.reload(rcm)
+    mgr, _, _ = _build_manager(monkeypatch, rcm, tmp_env)
+
+    video = tmp_path / 'video.mp4'
+    video.write_bytes(b'data')
+
+    class _BadMediaResp:
+        status_code = 200
+        text = '{"success": false}'
+        def raise_for_status(self): pass
+        def json(self): return {"success": False}
+
+    monkeypatch.setattr(rcm.requests, 'post', lambda url, **k: _BadMediaResp())
+
+    with pytest.raises(RuntimeError):
+        mgr.send("room123", "caption", attachments=[str(video)])
 
 
 # ---------------------------------------------------------------------------
