@@ -37,7 +37,7 @@ coverage before changing persisted data or startup behavior.
 ## P1 — Make setup self-service
 
 - [ ] **Provide a platform-neutral Signal linking workflow.** Document both
-  dedicated-number registration and linked-device setup with matching config
+  dedicated-number registration and linked-device setup with matching configuration
   paths. Avoid requiring users to send QR payloads to third-party QR websites;
   provide a local/terminal QR option or explain a trusted local alternative.
 - [ ] **Add an interactive installer or setup validator.** It should create
