@@ -112,9 +112,12 @@ mount currently surfaces as a confusing Python traceback from `bot.py`.
    restart/health status reflects a real failure instead of a silent crash
    loop with a bare traceback.
 4. Gate the "hard fail on unrecoverable error" behavior behind
-   `PREFLIGHT_STRICT` (default `true` for new installs is fine because it
-   only changes what happens when something is *already* broken — a
-   currently-working install has nothing that would newly fail).
+   `PREFLIGHT_STRICT`, **defaulted to `false`** so a currently-working
+   install's behavior is byte-for-byte unchanged (it never hits an
+   unrecoverable condition, so this only matters for broken installs, but
+   defaulting to `false` avoids any risk of a false-positive check turning a
+   working install's warning into a hard failure). Installers can opt in to
+   `PREFLIGHT_STRICT=true` for fail-fast CI/first-run validation.
 
 **Compatibility contract:** A container that currently starts successfully
 must still start successfully with identical logs plus the new preflight
@@ -438,15 +441,21 @@ chown).
    `ffmpeg -version` to confirm all three are present, then runs the
    `entrypoint.sh` against (a) an empty `data` volume to assert the
    link/register warning prints and the process reaches `bot.py` without
-   crashing, and (b) a fixture `data`/`archive` volume (checked into
-   `tests/fixtures/`, containing only synthetic non-secret data) to assert
-   startup succeeds and no new files are created that would break a real
-   `signal-cli` config.
+   crashing, and (b) a generated-at-test-time `data`/`archive` volume (see
+   step 3 below) to assert startup succeeds and no new files are created
+   that would break a real `signal-cli` config.
 2. Add a check that no secrets/account data are baked into the image layers
    (`docker history`/`docker save` + grep for `.env`, phone numbers, or
    `signal-cli` credential file patterns), guarding against a future
    `COPY . .` regression accidentally including a local `.env`/`data`.
-3. Run existing `pytest` suite (`tests/`) as part of the same workflow if
+3. Generate the fixture `data`/`archive` volumes at test time (e.g. a small
+   `tests/fixtures/generate_signal_cli_fixture.py` that writes a minimal,
+   clearly-fake `signal-cli` config with placeholder UUIDs/device IDs and a
+   throwaway `stats.json`/`users_map.json`/`index.json`) instead of
+   committing pre-built fixture files, so nothing resembling a real
+   credential or account identifier is ever checked into the repo or
+   mistaken for one by secret scanners.
+4. Run existing `pytest` suite (`tests/`) as part of the same workflow if
    not already wired in.
 
 **Compatibility contract:** CI-only; no runtime behavior changes.
@@ -539,9 +548,10 @@ independently.
   be additive and never replace or gate the existing entrypoint/launch
   path for a currently-working install.
 - [ ] Test upgrades against representative legacy `data` and `archive`
-  directories (fixtures captured under `tests/fixtures/`, see P2.2) before
-  release, including permissions owned by the configured PUID/PGID and
-  installs with no PUID/PGID set at all (root-based `docker-compose.yml`).
+  directories (generated via the test-time fixture generator introduced in
+  P2.2, never committed pre-built) before release, including permissions
+  owned by the configured PUID/PGID and installs with no PUID/PGID set at
+  all (root-based `docker-compose.yml`).
 - [ ] Any change that touches `entrypoint.sh`, `Dockerfile`, or
   `config.py` must be reviewed against the "Ground truth" section above and
   called out explicitly in the PR description if it changes a default.
