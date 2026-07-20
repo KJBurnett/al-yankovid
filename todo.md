@@ -521,7 +521,7 @@ independently.
 
 ## Sequencing and dependencies
 
-1. **P0 first, in order 0.5 → 0.2 → 0.3 → 0.4 → 0.1** — configuration
+1. **P0 first, in order P0.5 → P0.2 → P0.3 → P0.4 → P0.1** — configuration
    documentation and preflight validation are prerequisites for writing
    accurate quick-start docs, and the auto-update fix should land before
    promoting a `:stable` tag that non-root installers will pull.
