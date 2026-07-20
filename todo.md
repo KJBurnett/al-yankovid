@@ -452,9 +452,7 @@ chown).
    `tests/fixtures/generate_signal_cli_fixture.py` that writes a minimal,
    clearly-fake `signal-cli` config with placeholder UUIDs/device IDs and a
    throwaway `stats.json`/`users_map.json`/`index.json`) instead of
-   committing pre-built fixture files, so nothing resembling a real
-   credential or account identifier is ever checked into the repo or
-   mistaken for one by secret scanners.
+   committing pre-built fixture files.
 4. Run existing `pytest` suite (`tests/`) as part of the same workflow if
    not already wired in.
 
